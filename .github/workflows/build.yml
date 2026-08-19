@@ -75,7 +75,7 @@ jobs:
           BIN_UM="um"; BIN_QMC="qmc-decoder"
           [ "$RUNNER_OS" = "Windows" ] && { BIN_UM="um.exe"; BIN_QMC="qmc-decoder.exe"; }
           pyinstaller --noconfirm --windowed --onedir --name music-unlock \
-            --hidden-import apkmirror_fetch \
+            --hidden-import apkmirror_fetch --hidden-import PIL._tkinter_finder \
             --collect-all ttkbootstrap --collect-all tkinterdnd2 \
             --collect-all gamdl --collect-all scrapling \
             --collect-all patchright --collect-all camoufox \
