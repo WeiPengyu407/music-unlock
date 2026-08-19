@@ -96,7 +96,7 @@ def seed_assets(progress_cb=None):
     if not os.path.isdir(ASSETS_SRC):
         return
     os.makedirs(MU_DIR, exist_ok=True)
-    for item in ("wrapper-v2-image.tar.gz", "wheels", "bundled"):
+    for item in ("wrapper-v2-image.tar.gz", "wrapper-v2-image-arm64.tar.gz", "wheels", "bundled"):
         src = os.path.join(ASSETS_SRC, item)
         dst = os.path.join(MU_DIR, item)
         if os.path.exists(src) and not os.path.exists(dst):
@@ -244,6 +244,17 @@ import hashlib
 import shutil
 import zipfile
 
+def _target_arch():
+    """容器/零件架构：Apple Silicon（及其他 arm64 主机）用 arm64 原生镜像，
+    Docker Desktop 原生速度运行；x86_64 主机用 x86_64 镜像。"""
+    import platform
+    return "arm64-v8a" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
+
+
+def _image_tag():
+    return "wrapper-v2:arm64" if _target_arch() == "arm64-v8a" else "wrapper-v2:latest"
+
+
 if sys.platform == "win32":
     _BASE = os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
 elif sys.platform == "darwin":
@@ -255,7 +266,10 @@ WRAP_DIR = os.path.join(MU_DIR, "wrapper-v2")
 LIBS_DIR = os.path.join(MU_DIR, "apple-libs")
 DATA_DIR = os.path.join(WRAP_DIR, "data")
 WHEELS_DIR = os.path.join(MU_DIR, "wheels")
-IMAGE_TAR = os.path.join(MU_DIR, "wrapper-v2-image.tar.gz")
+IMAGE_TAR = os.path.join(
+    MU_DIR,
+    "wrapper-v2-image-arm64.tar.gz" if _target_arch() == "arm64-v8a"
+    else "wrapper-v2-image.tar.gz")
 GAMDL_VENV = os.path.join(_BASE, "gamdl-venv")
 GAMDL = _venv_tool(GAMDL_VENV, "gamdl")
 SCRAPLING_VENV = os.path.join(_BASE, "scrapling-venv")
@@ -438,12 +452,13 @@ def _pkexec(*args):
 
 
 def _expected_libs():
-    """零件哈希表：开发环境在 wrapper 源码目录，打包环境在 bundle 资产里。"""
+    """零件哈希表：开发环境在 wrapper 源码目录，打包环境在 bundle 资产里。
+    按主机架构取 x86_64 或 arm64-v8a 分组。"""
     for p in (os.path.join(WRAP_DIR, "LIBS_VERSION.json"),
               os.path.join(ASSETS_SRC, "LIBS_VERSION.json")):
         if os.path.exists(p):
             with open(p) as f:
-                return json.load(f)["libs"]["x86_64"]
+                return json.load(f)["libs"][_target_arch()]
     raise WrapperError("缺少零件哈希表 LIBS_VERSION.json")
 
 
@@ -457,23 +472,24 @@ def libs_staged():
 
 
 def stage_libs_from_apk(apk_path):
-    """从 APK/APKM 拆出 18 个苹果 .so，逐字节对哈希（防篡改），落位 LIBS_DIR。"""
+    """从 APK/APKM 拆出本机架构的 18 个苹果 .so，逐字节对哈希（防篡改），落位 LIBS_DIR。"""
     expected = _expected_libs()
+    arch_token = "arm64" if _target_arch() == "arm64-v8a" else "x86_64"
     got = {}
 
     def harvest(zf, prefix=""):
         for name in zf.namelist():
             base = name.rsplit("/", 1)[-1]
-            if base in expected and ("lib/x86_64/" in name or prefix):
+            if base in expected and (f"lib/{arch_token}" in name or prefix):
                 got[base] = zf.read(name)
 
     try:
         with zipfile.ZipFile(apk_path) as z:
             names = z.namelist()
             if any(n.endswith(".apk") for n in names):  # APKM 套娃包
-                inner = [n for n in names if "x86_64" in n and n.endswith(".apk")]
+                inner = [n for n in names if arch_token in n and n.endswith(".apk")]
                 if not inner:
-                    raise WrapperError("APK 包里没有 x86_64 架构的零件（换个通用包）")
+                    raise WrapperError(f"APK 包里没有 {arch_token} 架构的零件（换个通用包）")
                 import io
                 with zipfile.ZipFile(io.BytesIO(z.read(inner[0]))) as z2:
                     harvest(z2)
