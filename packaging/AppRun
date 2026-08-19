@@ -1,0 +1,5 @@
+#!/bin/bash
+# 音乐解锁 AppImage 启动器。资产播种（bundle → ~/.local/share/music-unlock）
+# 由应用内的 apple_music.seed_assets() 完成，这里只做转发。
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/music-unlock-dir/music-unlock" "$@"

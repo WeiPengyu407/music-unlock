@@ -1,0 +1,17 @@
+# 构建产物
+build/
+dist/
+__pycache__/
+*.pyc
+*.spec
+AppDir/
+*.AppImage
+Output/
+dmg-root/
+/um
+/um.exe
+/qmc-decoder
+/qmc-decoder.exe
+
+# Rust
+vendor/qmc-decoder/target/

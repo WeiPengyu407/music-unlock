@@ -1,0 +1,132 @@
+name: build
+
+# 三系统安装包流水线。
+# 重资产策略：wrapper 镜像包 + 零件哈希表放在 GitHub Release "runtime-assets" 里
+# （本机 docker save 产出，一次性上传）；浏览器组件因每系统二进制不同，
+# 在各自 runner 上现场 patchright/camoufox 下载后打成内置 tar 包；
+# Python 依赖全部打进 App（冻结模式不需要 wheels 目录）。
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: windows
+          - os: macos-13 # x86_64；Apple Silicon 跑 x86_64 安卓库未经实测
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Python 依赖
+        run: pip install pyinstaller ttkbootstrap tkinterdnd2 pycryptodome pillow gamdl "scrapling[all]"
+
+      - name: 构建 um 引擎（Go）
+        run: |
+          go install git.unlock-music.dev/um/cli@v0.2.12
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$(go env GOPATH)/bin/cli.exe" um.exe
+          else
+            cp "$(go env GOPATH)/bin/cli" um
+          fi
+        shell: bash
+
+      - name: 构建 qmc-decoder 引擎（Rust）
+        run: |
+          cd vendor/qmc-decoder && cargo build --release
+          cd ../..
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp vendor/qmc-decoder/target/release/qmc-decoder.exe .
+          else
+            cp vendor/qmc-decoder/target/release/qmc-decoder .
+          fi
+        shell: bash
+
+      - name: PyInstaller 冻结
+        run: |
+          BIN_UM="um"; BIN_QMC="qmc-decoder"
+          [ "$RUNNER_OS" = "Windows" ] && { BIN_UM="um.exe"; BIN_QMC="qmc-decoder.exe"; }
+          pyinstaller --noconfirm --windowed --onedir --name music-unlock \
+            --hidden-import apkmirror_fetch \
+            --collect-all ttkbootstrap --collect-all tkinterdnd2 \
+            --collect-all gamdl --collect-all scrapling \
+            --collect-all patchright --collect-all camoufox \
+            --add-binary "$BIN_UM:." --add-binary "$BIN_QMC:." \
+            music_unlock.py
+        shell: bash
+
+      - name: 下载运行时资产（wrapper 镜像 + 零件哈希表）
+        run: |
+          mkdir -p dist/music-unlock/assets
+          BASE="https://github.com/${{ github.repository }}/releases/download/runtime-assets"
+          curl -sfL "$BASE/wrapper-v2-image.tar.gz" -o dist/music-unlock/assets/wrapper-v2-image.tar.gz
+          curl -sfL "$BASE/LIBS_VERSION.json" -o dist/music-unlock/assets/LIBS_VERSION.json
+        shell: bash
+
+      - name: 浏览器组件打成内置包（每系统各自的二进制）
+        run: |
+          python -m patchright install chromium
+          python -m camoufox fetch
+          mkdir -p dist/music-unlock/assets/bundled
+          case "$RUNNER_OS" in
+            Linux)   CAMOU=~/.cache/camoufox; PW=~/.cache/ms-playwright ;;
+            macOS)   CAMOU=~/Library/Caches/camoufox; PW=~/Library/Caches/ms-playwright ;;
+            Windows) CAMOU="$LOCALAPPDATA/camoufox"; PW="$LOCALAPPDATA/ms-playwright" ;;
+          esac
+          tar -czf dist/music-unlock/assets/bundled/browser-cache-camoufox.tar.gz -C "$(dirname "$CAMOU")" "$(basename "$CAMOU")"
+          tar -czf dist/music-unlock/assets/bundled/browser-cache-patchright.tar.gz -C "$PW" \
+            "$(ls "$PW" | grep chromium_headless_shell | head -1)" "$(ls "$PW" | grep ffmpeg | head -1)"
+        shell: bash
+
+      - name: 打包 Linux（AppImage）
+        if: matrix.platform == 'linux'
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp -r dist/music-unlock AppDir/usr/bin/music-unlock-dir
+          cp packaging/AppRun AppDir/AppRun && chmod +x AppDir/AppRun
+          cp packaging/music-unlock.desktop packaging/music-unlock.png AppDir/
+          curl -sfL https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -o /tmp/appimagetool
+          chmod +x /tmp/appimagetool
+          ARCH=x86_64 /tmp/appimagetool AppDir "音乐解锁-x86_64.AppImage"
+
+      - name: 打包 Windows（便携 zip + Inno 安装包）
+        if: matrix.platform == 'windows'
+        run: |
+          choco install innosetup --no-progress -y
+          iscc packaging/installer.iss
+          cd dist && 7z a "../音乐解锁-windows-x86_64-portable.zip" music-unlock && cd ..
+
+      - name: 打包 macOS（dmg）
+        if: matrix.platform == 'macos'
+        run: |
+          mkdir -p dmg-root && cp -r dist/music-unlock.app dmg-root/ || cp -r dist/music-unlock dmg-root/
+          hdiutil create -volname 音乐解锁 -srcfolder dmg-root -ov -format UDZO "音乐解锁-macos-x86_64.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 音乐解锁-${{ matrix.platform }}
+          path: |
+            *.AppImage
+            *.zip
+            *.dmg
+            Output/*.exe
+          if-no-files-found: error

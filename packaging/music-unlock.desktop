@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=音乐解锁
+Comment=加密音乐格式转普通音频（ncm/qmc/kgm/Apple Music 等）
+Exec=music-unlock
+Icon=music-unlock
+Categories=AudioVideo;Audio;
+Terminal=false
