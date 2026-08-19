@@ -48,14 +48,14 @@ jobs:
 
       - name: 构建 um 引擎（Go）
         run: |
-          # 官方源 git.unlock-music.dev 有 Cloudflare 盾，CI 直连必挂；
-          # 用 GitHub 官方镜像仓库 clone 后本地编译
-          git clone --depth 1 --branch v0.2.12 https://github.com/unlock-music/cli /tmp/um-cli
+          # 官方源 git.unlock-music.dev 有 Cloudflare 盾；GitHub 镜像被 DMCA 下架；
+          # 用 Codeberg 镜像（main 分支，比 tag 新）
+          git clone --depth 1 https://codeberg.org/TTsdzb/unlock-music-cli.git /tmp/um-cli
           cd /tmp/um-cli
           if [ "$RUNNER_OS" = "Windows" ]; then
-            go build -o "$GITHUB_WORKSPACE/um.exe" .
+            go build -o "$GITHUB_WORKSPACE/um.exe" ./cmd/um
           else
-            go build -o "$GITHUB_WORKSPACE/um" .
+            go build -o "$GITHUB_WORKSPACE/um" ./cmd/um
           fi
         shell: bash
 
