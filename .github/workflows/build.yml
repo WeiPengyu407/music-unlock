@@ -75,14 +75,14 @@ jobs:
 
       - name: PyInstaller 冻结
         run: |
-          BIN_UM="um"; BIN_QMC="qmc-decoder"
-          [ "$RUNNER_OS" = "Windows" ] && { BIN_UM="um.exe"; BIN_QMC="qmc-decoder.exe"; }
+          BIN_UM="um"; BIN_QMC="qmc-decoder"; SEP=":"
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN_UM="um.exe"; BIN_QMC="qmc-decoder.exe"; SEP=";"; fi
           pyinstaller --noconfirm --windowed --onedir --name music-unlock \
             --hidden-import apkmirror_fetch --hidden-import PIL._tkinter_finder \
             --collect-all ttkbootstrap --collect-all tkinterdnd2 \
             --collect-all gamdl --collect-all scrapling \
             --collect-all patchright --collect-all camoufox \
-            --add-binary "$BIN_UM:." --add-binary "$BIN_QMC:." \
+            --add-binary "$BIN_UM$SEP." --add-binary "$BIN_QMC$SEP." \
             music_unlock.py
         shell: bash
 
