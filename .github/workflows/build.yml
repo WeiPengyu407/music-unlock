@@ -40,6 +40,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache: false  # go 项目在构建期才 clone，仓库根没有 go.sum
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -47,6 +48,8 @@ jobs:
         run: pip install pyinstaller ttkbootstrap tkinterdnd2 pycryptodome pillow gamdl "scrapling[all]"
 
       - name: 构建 um 引擎（Go）
+        env:
+          GOPROXY: https://goproxy.cn,direct  # unlock-music.dev/mmkv 官方源 403，proxy.golang.org 未缓存，goproxy.cn 有缓存
         run: |
           # 官方源 git.unlock-music.dev 有 Cloudflare 盾；GitHub 镜像被 DMCA 下架；
           # 用 Codeberg 镜像（main 分支，比 tag 新）
