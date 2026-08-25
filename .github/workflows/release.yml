@@ -24,16 +24,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ github.token }}
           path: packages
       - name: 发布
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag }}
         run: |
           mapfile -t files < <(find packages -type f)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no artifacts from run ${{ github.event.inputs.run_id }}"
+            exit 1
+          fi
           printf '%s\n' "${files[@]}"
-          gh release create "${{ github.event.inputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --target "${{ github.sha }}" \
-            --title "${{ github.event.inputs.tag }}" \
-            --notes $'Windows x86_64 与 Apple Silicon 安装包。\n\n- Windows：安装版 exe 或便携 zip\n- macOS：Apple Silicon dmg' \
-            "${files[@]}"
+          notes=$'Windows x86_64 与 Apple Silicon 安装包。\n\n- Windows：安装版 exe 或便携 zip\n- macOS：Apple Silicon dmg'
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --title "$TAG" \
+              --notes "$notes" \
+              "${files[@]}"
+          fi
