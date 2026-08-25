@@ -36,11 +36,11 @@
 
 到 [Releases](../../releases) 页面下载对应系统的安装包：
 
-- **Windows**：`音乐解锁-setup-windows-x86_64.exe`（安装版）或 `*-portable.zip`（便携版，解压即用）
-- **macOS**：`音乐解锁-macos-arm64.dmg`（Apple Silicon）
+- **Windows**：`music-unlock-windows-x86_64-portable.zip`（便携版，解压即用）
+- **macOS**：`music-unlock-macos-arm64.dmg`（Apple Silicon）
+- **Linux**：`music-unlock-linux-x86_64.AppImage`（各发行版通用，`chmod +x` 后直接跑）
 
-Windows 和 Apple Silicon 安装包由 GitHub Actions 自动构建（见 `.github/workflows/build.yml`），
-构建日志公开可查。
+Windows / macOS 由 GitHub Actions 构建；Linux AppImage 在 x86_64 机器上跑 `packaging/build-linux.sh`。
 
 ## 使用方法
 
