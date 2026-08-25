@@ -60,7 +60,7 @@ ENCRYPTED_PREFIXES = (".mflac", ".mgg", ".bkc", ".kgm")
 
 def is_music_file(path):
     ext = os.path.splitext(path)[1].lower()
-    return ext in ENCRYPTED_EXTS or ext == "" or any(ext.startswith(p) for p in ENCRYPTED_PREFIXES)
+    return ext in ENCRYPTED_EXTS or any(ext.startswith(p) for p in ENCRYPTED_PREFIXES)
 
 
 def collect(paths):
@@ -75,6 +75,20 @@ def collect(paths):
         elif is_music_file(p):
             out.append((p, os.path.basename(p)))
     return out
+
+
+def open_external(target):
+    """用当前系统的默认应用打开 URL 或目录。"""
+    try:
+        if sys.platform == "win32":
+            os.startfile(target)
+        else:
+            command = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen(
+                [command, target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
 
 
 def _font(size=10, weight="normal"):
@@ -302,8 +316,8 @@ class App(ttk.Window):
             tip += "，再点「开始转换」重试失败项" if failed else "，musicex 直接解"
             self.status.config(text=tip)
         else:
-            subprocess.Popen(["xdg-open", "https://y.qq.com"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if not open_external("https://y.qq.com"):
+                self.status.config(text="无法打开浏览器，请手动访问 https://y.qq.com")
             self.login_prompt()
 
     def login_prompt(self):
@@ -541,17 +555,27 @@ class App(ttk.Window):
         self.status.after(0, lambda: self.status.config(text=text))
 
     def work(self):
-        ok, fail = 0, 0
-        n = len(self.items)
-        for i, (path, _disp, _st) in enumerate(self.items, 1):
-            self.set_status(f"[{i}/{n}] {os.path.basename(path)}")
+        pending = [
+            (index, item[0])
+            for index, item in enumerate(self.items)
+            if not item[2].strip().startswith("✓")
+        ]
+        ok = sum(1 for item in self.items if item[2].strip().startswith("✓"))
+        fail = 0
+        n = len(pending)
+        if not pending:
+            self.set_status("全部任务已成功，无需重试")
+            self.run_btn.after(0, lambda: self.run_btn.config(state="normal"))
+            return
+        for position, (index, path) in enumerate(pending, 1):
+            self.set_status(f"[{position}/{n}] {os.path.basename(path)}")
             good, why = self.unlock(path)
             if good:
                 ok += 1
-                self.set_row(i - 1, " ✓")
+                self.set_row(index, " ✓")
             else:
                 fail += 1
-                self.set_row(i - 1, f" ✗ {why[:50]}")
+                self.set_row(index, f" ✗ {why[:50]}")
         self.set_status(f"完成：成功 {ok}，失败 {fail}" + (f"（输出在「{OUT_NAME}」）" if ok else ""))
         if ok and self.outdir:
             self.open_btn.after(0, lambda: self.open_btn.config(state="normal"))
@@ -565,25 +589,31 @@ class App(ttk.Window):
                 return False, "解密链未就绪（点「检查Apple解密链」）"
             return apple_music.download(path, self.outdir, progress_cb=self.set_status)
         self.outdir = os.path.join(os.path.dirname(path) or ".", OUT_NAME)
+        ext = os.path.splitext(path)[1].lower()
+        if ext.startswith((".mgg", ".mflac")):
+            import qmc_ekey
+            info = qmc_ekey.parse_musicex_footer(path)
+            if info:
+                return self.unlock_qmc2(path, info)
         r = subprocess.run([UM, "-i", path, "-o", self.outdir, "--overwrite"],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return True, ""
-        ext = os.path.splitext(path)[1].lower()
         if ext.startswith((".mgg", ".mflac")):
             return self.unlock_qmc2(path)
         why = (r.stderr or r.stdout).strip().splitlines()
         return False, (why[-1] if why else "未知错误")
 
-    def unlock_qmc2(self, path):
+    def unlock_qmc2(self, path, info=None):
         import qmc_ekey
-        info = qmc_ekey.parse_musicex_footer(path)
+        info = info or qmc_ekey.parse_musicex_footer(path)
         if not info:
             return False, "非 musicex 格式"
         _, media_mid, filename = info
-        ekey = qmc_ekey.fetch_ekey(media_mid, filename)
-        if not ekey:
-            return False, "无 QQ 登录态（点「导入QQ登录态」）"
+        try:
+            ekey = qmc_ekey.fetch_ekey(media_mid, filename)
+        except qmc_ekey.EkeyFetchError as exc:
+            return False, str(exc)
         r = subprocess.run([QMC, "--ekey", ekey, path, self.outdir],
                            capture_output=True, text=True)
         if r.returncode == 0:
@@ -593,8 +623,8 @@ class App(ttk.Window):
 
     def open_out(self):
         if self.outdir:
-            subprocess.Popen(["xdg-open", self.outdir],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if not open_external(self.outdir):
+                self.status.config(text=f"无法自动打开目录：{self.outdir}")
 
 
 if __name__ == "__main__":

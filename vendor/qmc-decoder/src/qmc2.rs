@@ -28,7 +28,10 @@ impl std::fmt::Display for Qmc2Error {
         match self {
             Qmc2Error::Base64DecodeError(e) => write!(f, "Base64 decode error: {}", e),
             Qmc2Error::KeyDeriveError => {
-                write!(f, "Failed to derive key from ekey (TC-TEA decryption failed)")
+                write!(
+                    f,
+                    "Failed to derive key from ekey (TC-TEA decryption failed)"
+                )
             }
             Qmc2Error::KeyTooShort => write!(f, "Decoded key is too short (< 8 bytes)"),
         }
@@ -80,14 +83,13 @@ fn parse_ekey(ekey: &str) -> Result<Vec<u8>, Qmc2Error> {
     // Check for EncV2 prefix
     let ekey_decoded = if ekey_decoded.starts_with(QMC2_ENCV2_PREFIX) {
         let encv2_blob = &ekey_decoded[QMC2_ENCV2_PREFIX.len()..];
-        let encv2_stage1 = tc_tea::decrypt(encv2_blob, QMC2_ENCV2_STAGE1_KEY)
+        let encv2_stage1 =
+            tc_tea::decrypt(encv2_blob, QMC2_ENCV2_STAGE1_KEY).ok_or(Qmc2Error::KeyDeriveError)?;
+        let encv2_stage2 = tc_tea::decrypt(&encv2_stage1, QMC2_ENCV2_STAGE2_KEY)
             .ok_or(Qmc2Error::KeyDeriveError)?;
-        let encv2_stage2 =
-            tc_tea::decrypt(&encv2_stage1, QMC2_ENCV2_STAGE2_KEY).ok_or(Qmc2Error::KeyDeriveError)?;
-        let encv1_ekey = base64::engine::general_purpose::STANDARD
+        base64::engine::general_purpose::STANDARD
             .decode(&encv2_stage2)
-            .map_err(Qmc2Error::Base64DecodeError)?;
-        encv1_ekey
+            .map_err(Qmc2Error::Base64DecodeError)?
     } else {
         ekey_decoded
     };
@@ -110,7 +112,7 @@ fn parse_ekey(ekey: &str) -> Result<Vec<u8>, Qmc2Error> {
     let tea_key = derive_tea_key(header);
 
     // Try TC-TEA decryption (EncV1 format)
-    if let Some(decrypted_body) = tc_tea::decrypt(body, &tea_key) {
+    if let Some(decrypted_body) = tc_tea::decrypt(body, tea_key) {
         // Successfully decrypted EncV1 format
         let mut result = Vec::with_capacity(8 + decrypted_body.len());
         result.extend_from_slice(header);
@@ -134,9 +136,7 @@ struct Qmc2MapCrypto {
 
 impl Qmc2MapCrypto {
     fn new(key: &[u8]) -> Self {
-        Qmc2MapCrypto {
-            key: key.to_vec(),
-        }
+        Qmc2MapCrypto { key: key.to_vec() }
     }
 
     /// Scramble a key byte by its index (bit rotation)
@@ -242,7 +242,7 @@ impl Qmc2Rc4Crypto {
 
     /// RC4 PRGA - derive one byte
     #[inline]
-    fn rc4_derive(n: usize, s: &mut Vec<u8>, j: &mut usize, k: &mut usize) -> u8 {
+    fn rc4_derive(n: usize, s: &mut [u8], j: &mut usize, k: &mut usize) -> u8 {
         *j = (*j + 1) % n;
         *k = (usize::from(s[*j]) + *k) % n;
         s.swap(*j, *k);
@@ -253,12 +253,11 @@ impl Qmc2Rc4Crypto {
     /// Encrypt/decrypt first segment (offset < 0x80)
     fn encode_first_segment(&self, offset: usize, buf: &mut [u8]) {
         let n = self.rc4_key.len();
-        let mut offset = offset;
-        for byte in buf.iter_mut() {
-            let key1 = self.rc4_key[offset % n];
-            let key2 = self.calc_segment_key(offset, key1);
+        for (relative_offset, byte) in buf.iter_mut().enumerate() {
+            let position = offset + relative_offset;
+            let key1 = self.rc4_key[position % n];
+            let key2 = self.calc_segment_key(position, key1);
             *byte ^= self.rc4_key[key2 % n];
-            offset += 1;
         }
     }
 
@@ -368,10 +367,7 @@ mod tests {
     #[test]
     fn test_simple_make_key() {
         let result = simple_make_key(106, 8);
-        assert_eq!(
-            result,
-            vec![0x69, 0x56, 0x46, 0x38, 0x2b, 0x20, 0x15, 0x0b]
-        );
+        assert_eq!(result, vec![0x69, 0x56, 0x46, 0x38, 0x2b, 0x20, 0x15, 0x0b]);
     }
 
     #[test]
@@ -381,8 +377,8 @@ mod tests {
         assert_eq!(
             tea_key,
             [
-                0x69, 0xf1, 0x56, 0xf2, 0x46, 0xf3, 0x38, 0xf4, 0x2b, 0xf5, 0x20, 0xf6, 0x15,
-                0xf7, 0x0b, 0xf8,
+                0x69, 0xf1, 0x56, 0xf2, 0x46, 0xf3, 0x38, 0xf4, 0x2b, 0xf5, 0x20, 0xf6, 0x15, 0xf7,
+                0x0b, 0xf8,
             ]
         );
     }
@@ -404,8 +400,8 @@ mod tests {
         let (header, body) = test_key.split_at(8);
         let tea_key = derive_tea_key(header);
 
-        let encrypted_body = tc_tea::encrypt(body, &tea_key).unwrap();
-        let ekey_encoded = [&header as &[u8], &*encrypted_body].concat();
+        let encrypted_body = tc_tea::encrypt(body, tea_key).unwrap();
+        let ekey_encoded = [header, &*encrypted_body].concat();
         let ekey = base64::engine::general_purpose::STANDARD.encode(&ekey_encoded);
 
         let parsed_key = parse_ekey(&ekey).unwrap();
@@ -424,8 +420,8 @@ mod tests {
         assert_eq!(
             data,
             [
-                0x3F, 0x8A, 0xC1, 0x49, 0x3F, 0x49, 0xC1, 0x8A, 0x3F, 0x8A, 0xC1, 0x49, 0x3F,
-                0x49, 0xC1, 0x8A
+                0x3F, 0x8A, 0xC1, 0x49, 0x3F, 0x49, 0xC1, 0x8A, 0x3F, 0x8A, 0xC1, 0x49, 0x3F, 0x49,
+                0xC1, 0x8A
             ]
         );
     }
@@ -442,8 +438,8 @@ mod tests {
         assert_eq!(
             data,
             [
-                0x8A, 0x3F, 0x8A, 0xC1, 0x49, 0x3F, 0x49, 0xC1, 0x8A, 0x8A, 0xC1, 0x49, 0x3F,
-                0x49, 0xC1, 0x8A
+                0x8A, 0x3F, 0x8A, 0xC1, 0x49, 0x3F, 0x49, 0xC1, 0x8A, 0x8A, 0xC1, 0x49, 0x3F, 0x49,
+                0xC1, 0x8A
             ]
         );
     }
@@ -469,9 +465,6 @@ mod tests {
         let crypto = Qmc2Rc4Crypto::new(&rc4_key);
         let mut data = [0u8; 16];
         crypto.decrypt(0, &mut data);
-        assert_eq!(
-            data,
-            [0, 50, 16, 8, 5, 3, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0]
-        );
+        assert_eq!(data, [0, 50, 16, 8, 5, 3, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0]);
     }
 }

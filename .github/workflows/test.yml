@@ -1,0 +1,31 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install test dependencies
+        run: python -m pip install ttkbootstrap pycryptodome
+
+      - name: Test Python
+        run: |
+          python -m py_compile music_unlock.py apple_music.py qmc_ekey.py browser_cookies.py apkmirror_fetch.py
+          python -m unittest discover -s tests -v
+
+      - name: Test Rust
+        run: cargo test --manifest-path vendor/qmc-decoder/Cargo.toml

@@ -37,7 +37,7 @@
 到 [Releases](../../releases) 页面下载对应系统的安装包：
 
 - **Windows**：`音乐解锁-setup-windows-x86_64.exe`（安装版）或 `*-portable.zip`（便携版，解压即用）
-- **macOS**：`音乐解锁-macos-x86_64.dmg`（x86_64；Apple Silicon 未经实测）
+- **macOS**：`音乐解锁-macos-x86_64.dmg`（Intel）或 `音乐解锁-macos-arm64.dmg`（Apple Silicon）
 - **Linux**：`音乐解锁-x86_64.AppImage`（`chmod +x` 后直接运行）
 
 所有安装包均由 GitHub Actions 自动构建（见 `.github/workflows/build.yml`），
@@ -77,7 +77,8 @@
 
 **Q：Windows / macOS 上 Apple Music 功能的额外要求？**
 需要自行安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。
-Linux 上由程序自动安装（pkexec 图形授权）。其余功能（网易云/QQ/酷狗等）开箱即用。
+Linux 上支持通过 apt、dnf、yum、pacman、zypper 自动安装（pkexec 图形授权）；
+其他发行版需先手动安装 Docker。其余功能（网易云/QQ/酷狗等）开箱即用。
 
 **Q：Apple ID 登录安全吗？**
 账密只发送给本机 Docker 容器里的苹果官方解密组件（等价于在官方客户端里登录），
@@ -99,12 +100,14 @@ Linux 上由程序自动安装（pkexec 图形授权）。其余功能（网易�
 ## 从源码运行（开发者）
 
 ```bash
-pip install ttkbootstrap tkinterdnd2 pycryptodome pillow gamdl "scrapling[all]"
+python -m pip install -r requirements-build.txt
 # 引擎：um 见 git.unlock-music.dev/um/cli；qmc-decoder 见 vendor/qmc-decoder（cargo build --release）
 python3 music_unlock.py
 ```
 
 打包：`pyinstaller` 参数见 CI 工作流；`--self-test` 可验证打包产物完整性。
+测试：`python -m unittest discover -s tests -v` 和
+`cargo test --manifest-path vendor/qmc-decoder/Cargo.toml`。
 
 ## 组件与许可
 

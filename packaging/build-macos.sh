@@ -20,7 +20,7 @@ echo "=== 1/6 安装 Python 依赖 ==="
 python3 -m venv /tmp/mu-build-venv
 source /tmp/mu-build-venv/bin/activate
 pip install --upgrade pip
-pip install pyinstaller ttkbootstrap tkinterdnd2 pycryptodome pillow gamdl "scrapling[all]"
+python -m pip install -r requirements-build.txt
 
 echo "=== 2/6 编译 um 引擎（Go，走 Codeberg 镜像+goproxy.cn） ==="
 export GOPROXY=https://goproxy.cn,direct

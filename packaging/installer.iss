@@ -1,9 +1,13 @@
 ; 音乐解锁 Windows 安装包（Inno Setup）
 ; CI 中由 iscc 调用：dist\music-unlock\ 为 PyInstaller onedir 产物（含 assets）
 
+#ifndef AppVersion
+  #define AppVersion "1.0.2"
+#endif
+
 [Setup]
 AppName=音乐解锁
-AppVersion=1.0.0
+AppVersion={#AppVersion}
 AppPublisher=music-unlock
 DefaultDirName={autopf}\音乐解锁
 DefaultGroupName=音乐解锁

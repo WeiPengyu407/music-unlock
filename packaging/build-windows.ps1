@@ -21,7 +21,7 @@ if (-not (cargo --version 2>$null)) { rustup default stable }
 
 Write-Host "=== 1/6 安装 Python 依赖 ==="
 python -m pip install --upgrade pip
-pip install pyinstaller ttkbootstrap tkinterdnd2 pycryptodome pillow gamdl "scrapling[all]"
+python -m pip install -r requirements-build.txt
 
 Write-Host "=== 2/6 编译 um 引擎（Go，走 Codeberg 镜像+goproxy.cn） ==="
 $env:GOPROXY = 'https://goproxy.cn,direct'

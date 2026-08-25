@@ -17,7 +17,6 @@ fn main() {
                 i += 1;
                 ekey = args.get(i).cloned();
             }
-            "--fetch-ekey" => {} // lib 默认行为，兼容旧调用
             s => positional.push(s.to_string()),
         }
         i += 1;
@@ -43,7 +42,7 @@ fn main() {
     };
     std::fs::create_dir_all(outdir).expect("创建输出目录失败");
     let output = determine_output_path(input, Some(outdir), format);
-    match decrypt_file(input, &output, format, ekey.as_deref(), ekey.is_none()) {
+    match decrypt_file(input, &output, format, ekey.as_deref()) {
         Ok(r) => println!("{} -> {}", r.input_path.display(), r.output_path.display()),
         Err(e) => {
             eprintln!("解密失败: {e}");

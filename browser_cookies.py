@@ -8,7 +8,7 @@ Chromium 系 cookie 加密原理:
 - 主密钥存在 <profile>/Local State 的 os_crypt.encrypted_key (base64)
   - Windows: DPAPI 解密得主密钥 (AES-256)
   - macOS: keychain 里 "Chrome Safe Storage" 密码经 PBKDF2(saltysalt, pw, 1003) 派生
-  - Linux: v10 固定 PBKDF2('saltysalt', 'peanuts', 1, 16)
+  - Linux: 优先读取 Secret Service 中的浏览器 Safe Storage 密码，兼容 peanuts 旧值
 - cookie 值: 'v10'/'v11' 前缀 = AES-CBC(IV=16空格); 'v20' 前缀 = AES-GCM(nonce=值[3:15])
 """
 import base64
@@ -78,39 +78,89 @@ def _dpapi_decrypt(data):
     return out
 
 
-def _master_key(browser_root):
-    """从 Local State 提取解密的 AES 主密钥。"""
-    ls_path = os.path.join(browser_root, "Local State")
-    st = json.load(open(ls_path, encoding="utf-8"))
-    enc_key = base64.b64decode(st["os_crypt"]["encrypted_key"])
-    assert enc_key[:5] == b"DPAPI"
-    enc_key = enc_key[5:]
+def _safe_storage_names(browser_name):
+    names = {
+        "chrome": ("Chrome Safe Storage", "chrome"),
+        "edge": ("Microsoft Edge Safe Storage", "microsoft-edge"),
+        "chromium": ("Chromium Safe Storage", "chromium"),
+        "360": ("Chrome Safe Storage", "chrome"),
+        "360安全": ("Chrome Safe Storage", "chrome"),
+        "360极速": ("Chrome Safe Storage", "chrome"),
+    }
+    return names.get(browser_name, ("Chrome Safe Storage", browser_name))
+
+
+def _derive_key(password, iterations):
+    from hashlib import pbkdf2_hmac
+    return pbkdf2_hmac("sha1", password, b"saltysalt", iterations, 16)
+
+
+def _master_keys(browser_name, browser_root):
+    """返回该浏览器可能使用的 AES 密钥，Linux 包含 keyring 与旧版回退。"""
     if OSKEY == "win32":
-        return _dpapi_decrypt(enc_key)
+        ls_path = os.path.join(browser_root, "Local State")
+        with open(ls_path, encoding="utf-8") as f:
+            state = json.load(f)
+        encrypted = base64.b64decode(state["os_crypt"]["encrypted_key"])
+        if not encrypted.startswith(b"DPAPI"):
+            raise RuntimeError("Local State 中没有 DPAPI 主密钥")
+        return [_dpapi_decrypt(encrypted[5:])]
     if OSKEY == "darwin":
         import subprocess
-        pw = subprocess.run(
-            ["security", "find-generic-password", "-s", "Chrome Safe Storage", "-w"],
+        service, _application = _safe_storage_names(browser_name)
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-w"],
             capture_output=True, text=True)
-        if pw.returncode != 0:
-            raise RuntimeError("keychain 里没有 Chrome Safe Storage")
-        from hashlib import pbkdf2_hmac
-        return pbkdf2_hmac("sha1", pw.stdout.strip().encode(), b"saltysalt", 1003, 16)
-    # linux: v10 固定派生（无 keyring 或 keyring 默认密码时 Chrome 用它）
-    from hashlib import pbkdf2_hmac
-    return pbkdf2_hmac("sha1", b"peanuts", b"saltysalt", 1, 16)
+        if result.returncode != 0:
+            raise RuntimeError(f"keychain 里没有 {service}")
+        return [_derive_key(result.stdout.strip().encode(), 1003)]
+
+    passwords = []
+    _service, application = _safe_storage_names(browser_name)
+    if shutil.which("secret-tool"):
+        import subprocess
+        for app in dict.fromkeys((application, browser_name, "chrome", "chromium")):
+            result = subprocess.run(
+                ["secret-tool", "lookup", "application", app],
+                capture_output=True, timeout=10)
+            password = result.stdout.strip()
+            if result.returncode == 0 and password:
+                passwords.append(password)
+    passwords.append(b"peanuts")
+    return list(dict.fromkeys(_derive_key(password, 1) for password in passwords))
 
 
-def _decrypt_value(enc, key):
+def _decrypt_value(enc, keys, host):
     """解密单个 encrypted_value。"""
     AES = _aes()
-    if enc[:3] in (b"v10", b"v11"):
-        iv = b" " * 16
-        pt = AES.new(key, AES.MODE_CBC, iv).decrypt(enc[3:])
-        pad = pt[-1]
-        return pt[:-pad] if 0 < pad <= 16 else pt
-    if enc[:3] == b"v20":
-        return AES.new(key, AES.MODE_GCM, nonce=enc[3:15]).decrypt(enc[15:])
+    for key in keys:
+        try:
+            if enc[:3] in (b"v10", b"v11"):
+                payload = enc[3:]
+                if not payload or len(payload) % 16:
+                    continue
+                pt = AES.new(key, AES.MODE_CBC, b" " * 16).decrypt(payload)
+                pad = pt[-1]
+                if not 0 < pad <= 16 or pt[-pad:] != bytes([pad]) * pad:
+                    continue
+                pt = pt[:-pad]
+            elif enc[:3] == b"v20":
+                payload = enc[3:]
+                if len(payload) < 28:
+                    continue
+                nonce, ciphertext, tag = payload[:12], payload[12:-16], payload[-16:]
+                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+                pt = cipher.decrypt_and_verify(ciphertext, tag)
+            else:
+                return None
+
+            from hashlib import sha256
+            host_digest = sha256(host.encode()).digest()
+            if pt.startswith(host_digest):
+                pt = pt[len(host_digest):]
+            return pt
+        except (ValueError, KeyError):
+            continue
     return None
 
 
@@ -134,32 +184,34 @@ def _read_chromium_cookies(browser_name, root):
     if not dbs:
         return {}
     try:
-        key = _master_key(root)
+        keys = _master_keys(browser_name, root)
     except Exception:
         return {}
     out = {}
     for db in dbs:
-        tmp = os.path.join(tempfile.gettempdir(), f"mu_ck_{browser_name}.sqlite")
-        try:
-            shutil.copy(db, tmp)
-            con = sqlite3.connect(tmp)
-            rows = con.execute(
-                "select host_key, name, encrypted_value from cookies where host_key like ?",
-                (HOSTS_LIKE,)).fetchall()
-            con.close()
-            for _host, name, enc in rows:
-                if name not in WANT_KEYS or name in out:
-                    continue
-                try:
-                    v = _decrypt_value(enc, key)
-                    if v:
-                        out[name] = v.decode("utf-8", "ignore")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        finally:
-            os.path.exists(tmp) and os.remove(tmp)
+        with tempfile.TemporaryDirectory(prefix=f"mu_ck_{browser_name}_") as tmpdir:
+            tmp = os.path.join(tmpdir, "Cookies")
+            try:
+                shutil.copy2(db, tmp)
+                for suffix in ("-wal", "-shm"):
+                    if os.path.exists(db + suffix):
+                        shutil.copy2(db + suffix, tmp + suffix)
+                with sqlite3.connect(tmp) as con:
+                    rows = con.execute(
+                        "select host_key, name, value, encrypted_value "
+                        "from cookies where host_key like ?",
+                        (HOSTS_LIKE,)).fetchall()
+                for host, name, value, enc in rows:
+                    if name not in WANT_KEYS or name in out:
+                        continue
+                    try:
+                        plain = value.encode() if value else _decrypt_value(enc, keys, host)
+                        if plain:
+                            out[name] = plain.decode("utf-8")
+                    except (UnicodeDecodeError, ValueError):
+                        pass
+            except (OSError, sqlite3.Error):
+                pass
     return out
 
 

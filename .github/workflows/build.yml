@@ -45,7 +45,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Python 依赖
-        run: pip install pyinstaller ttkbootstrap tkinterdnd2 pycryptodome pillow gamdl "scrapling[all]"
+        run: python -m pip install -r requirements-build.txt
 
       - name: 构建 um 引擎（Go）
         env:
@@ -126,7 +126,9 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           choco install innosetup --no-progress -y
-          iscc packaging/installer.iss
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.2" }
+          iscc "/DAppVersion=$version" packaging/installer.iss
           cd dist && 7z a "../音乐解锁-windows-x86_64-portable.zip" music-unlock && cd ..
 
       - name: 打包 macOS（dmg）
@@ -137,7 +139,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: 音乐解锁-${{ matrix.platform }}
+          name: 音乐解锁-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             *.AppImage
             *.zip

@@ -8,6 +8,7 @@
 import json
 import os
 import struct
+import urllib.error
 import urllib.request
 
 API = "https://u.y.qq.com/cgi-bin/musicu.fcg"
@@ -15,15 +16,23 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 CONF = os.path.expanduser("~/.config/music-unlock/qqmusic.json")
 
 
+class EkeyFetchError(Exception):
+    """QQ 密钥接口调用失败。"""
+
+
 def parse_musicex_footer(path):
     """从 musicex 文件尾部分析出 (song_id, media_mid, filename)。不是 musicex 返回 None。"""
     with open(path, "rb") as f:
+        f.seek(0, 2)
+        file_size = f.tell()
+        if file_size < 16:
+            return None
         f.seek(-16, 2)
         tail = f.read()
     if tail[-8:] != b"musicex\x00":
         return None
     footer_size, version = struct.unpack("<II", tail[0:8])
-    if version != 1 or not 16 < footer_size < 16 * 1024 * 1024:
+    if version != 1 or not 16 < footer_size <= min(file_size, 16 * 1024 * 1024):
         return None
     with open(path, "rb") as f:
         f.seek(-footer_size, 2)
@@ -39,9 +48,11 @@ def parse_musicex_footer(path):
 
 
 def fetch_ekey(media_mid, filename, uin=None, authst=None, cookies=None):
-    """调 GetEVkey 接口取 ekey。凭据缺省时从配置/浏览器导入。成功返回 ekey 字符串，否则 None。"""
+    """调 GetEVkey 接口取 ekey。失败时抛出带原因的 EkeyFetchError。"""
     if cookies is None and not (uin and authst):
         uin, authst = load_credentials()
+    if cookies is None and not (uin and authst):
+        raise EkeyFetchError("无 QQ 登录态（点「导入QQ登录态」）")
     body = json.dumps({
         "comm": {"authst": authst or "", "ct": "19", "cv": "1859", "uin": uin or "0", "tmeLoginType": "3"},
         "req_1": {"module": "music.vkey.GetEVkey", "method": "CgiGetEVkey",
@@ -57,9 +68,14 @@ def fetch_ekey(media_mid, filename, uin=None, authst=None, cookies=None):
             d = json.loads(r.read())
         info = d["req_1"]["data"]["midurlinfo"][0]
         ekey = info.get("ekey") or ""
-        return ekey or None
-    except Exception:
-        return None
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise EkeyFetchError(f"QQ 密钥请求失败：{reason}") from exc
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise EkeyFetchError("QQ 密钥接口返回异常，登录态可能已失效") from exc
+    if not ekey:
+        raise EkeyFetchError("QQ 密钥为空，登录态可能已失效")
+    return ekey
 
 
 def load_credentials():
@@ -113,7 +129,9 @@ def import_from_qq_dir(qqdir):
 
 def save_credentials(uin, authst):
     os.makedirs(os.path.dirname(CONF), exist_ok=True)
-    json.dump({"uin": uin, "authst": authst}, open(CONF, "w"), indent=1)
+    fd = os.open(CONF, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"uin": uin, "authst": authst}, f, indent=1)
 
 
 def _firefox_cookie_db():

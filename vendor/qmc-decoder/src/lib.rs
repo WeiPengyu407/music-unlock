@@ -1,9 +1,8 @@
 //! QMC Decoder library
 //!
 //! Provides core decryption logic for QQ Music encrypted audio files
-//! (QMC1 and QMC2 formats), consumed by the Tauri frontend via commands.
+//! (QMC1 and QMC2 formats).
 
-mod ekey_fetch;
 mod qmc1;
 mod qmc2;
 
@@ -11,11 +10,6 @@ use base64::Engine;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// Re-export public API from sub-modules
-pub use ekey_fetch::{
-    call_get_evkey_api, fetch_ekey, get_qqmusic_credentials, parse_musicex_footer,
-    EkeyFetchError, MusicexInfo, QQMusicCredentials,
-};
 pub use qmc2::{Qmc2Crypto, Qmc2Error};
 
 /// Supported encrypted formats and their decrypted output format
@@ -104,15 +98,6 @@ pub struct DecryptResult {
     pub footer_info: FooterInfo,
 }
 
-/// Result of an info-only operation
-#[derive(Debug)]
-pub struct InfoResult {
-    pub input_path: PathBuf,
-    pub file_size: usize,
-    pub format: Format,
-    pub footer_info: FooterInfo,
-}
-
 /// Read a null-terminated UTF-16LE string from a byte slice at the given offset
 pub fn read_utf16_le_string(data: &[u8], offset: usize, max_len: usize) -> String {
     let mut chars = Vec::new();
@@ -138,60 +123,55 @@ pub fn detect_footer(data: &[u8]) -> FooterInfo {
     let last4 = &data[data.len() - 4..];
 
     // Check for "musicex\0" magic at end
-    if data.len() >= 16 {
-        if &data[data.len() - 8..] == b"musicex\x00" {
-            let magic_start = data.len() - 8;
-            let version_start = magic_start - 4;
-            let meta_size_start = version_start - 4;
+    if data.len() >= 16 && &data[data.len() - 8..] == b"musicex\x00" {
+        let magic_start = data.len() - 8;
+        let version_start = magic_start - 4;
+        let meta_size_start = version_start - 4;
 
-            if meta_size_start >= 4 {
-                let version =
-                    u32::from_le_bytes(data[version_start..magic_start].try_into().unwrap());
-                let footer_size =
-                    u32::from_le_bytes(data[meta_size_start..version_start].try_into().unwrap());
+        if meta_size_start >= 4 {
+            let version = u32::from_le_bytes(data[version_start..magic_start].try_into().unwrap());
+            let footer_size =
+                u32::from_le_bytes(data[meta_size_start..version_start].try_into().unwrap());
 
-                let metadata_size = (footer_size as usize).saturating_sub(16);
+            let metadata_size = (footer_size as usize).saturating_sub(16);
 
-                if version == 1 && metadata_size > 0 && metadata_size <= meta_size_start {
-                    let footer_start = data.len() - (footer_size as usize);
-                    let meta = &data[footer_start..meta_size_start];
+            if version == 1 && metadata_size > 0 && metadata_size <= meta_size_start {
+                let footer_start = data.len() - (footer_size as usize);
+                let meta = &data[footer_start..meta_size_start];
 
-                    let song_id = if meta.len() > 0x04 {
-                        u32::from_le_bytes(meta[0x00..0x04].try_into().unwrap_or([0u8; 4]))
-                    } else {
-                        0
-                    };
+                let song_id = if meta.len() > 0x04 {
+                    u32::from_le_bytes(meta[0x00..0x04].try_into().unwrap_or([0u8; 4]))
+                } else {
+                    0
+                };
 
-                    let mid = read_utf16_le_string(meta, 0x0C, 60);
-                    let filename = read_utf16_le_string(meta, 0x48, 68);
+                let mid = read_utf16_le_string(meta, 0x0C, 60);
+                let filename = read_utf16_le_string(meta, 0x48, 68);
 
-                    return FooterInfo::Musicex {
-                        song_id,
-                        mid,
-                        filename,
-                    };
-                }
+                return FooterInfo::Musicex {
+                    song_id,
+                    mid,
+                    filename,
+                };
             }
         }
     }
 
     // Check for QTag marker (last 4 bytes = "QTag" in little-endian = 0x67615451)
     let eof_magic = u32::from_le_bytes(last4.try_into().unwrap());
-    if eof_magic == 0x6761_5451 {
-        if data.len() >= 12 {
-            let meta_size_be =
-                u32::from_be_bytes(data[data.len() - 8..data.len() - 4].try_into().unwrap());
-            let meta_end = data.len() - 8;
-            let meta_start = meta_end.saturating_sub(meta_size_be as usize);
+    if eof_magic == 0x6761_5451 && data.len() >= 12 {
+        let meta_size_be =
+            u32::from_be_bytes(data[data.len() - 8..data.len() - 4].try_into().unwrap());
+        let meta_end = data.len() - 8;
+        let meta_start = meta_end.saturating_sub(meta_size_be as usize);
 
-            let meta = &data[meta_start..meta_end];
-            if let Some(comma_pos) = meta.iter().position(|&b| b == b',') {
-                let ekey = String::from_utf8_lossy(&meta[..comma_pos]).to_string();
-                let rest = &meta[comma_pos + 1..];
-                if let Some(comma2_pos) = rest.iter().position(|&b| b == b',') {
-                    let song_id = String::from_utf8_lossy(&rest[..comma2_pos]).to_string();
-                    return FooterInfo::QTag { ekey, song_id };
-                }
+        let meta = &data[meta_start..meta_end];
+        if let Some(comma_pos) = meta.iter().position(|&b| b == b',') {
+            let ekey = String::from_utf8_lossy(&meta[..comma_pos]).to_string();
+            let rest = &meta[comma_pos + 1..];
+            if let Some(comma2_pos) = rest.iter().position(|&b| b == b',') {
+                let song_id = String::from_utf8_lossy(&rest[..comma2_pos]).to_string();
+                return FooterInfo::QTag { ekey, song_id };
             }
         }
     }
@@ -243,13 +223,12 @@ pub fn determine_output_path(input: &Path, output: Option<&Path>, format: Format
 /// 3. Decrypts using QMC1 or QMC2 cipher as appropriate
 /// 4. Writes the decrypted data to the output path
 ///
-/// For QMC2 files with musicex footer, either `ekey` or `fetch_ekey` must be provided.
+/// QMC2 files with a musicex footer require an `ekey` supplied by the caller.
 pub fn decrypt_file(
     input_path: &Path,
     output_path: &Path,
     format: Format,
     ekey: Option<&str>,
-    fetch_ekey: bool,
 ) -> Result<DecryptResult, String> {
     let data = fs::read(input_path)
         .map_err(|e| format!("Failed to read {}: {}", input_path.display(), e))?;
@@ -299,9 +278,7 @@ pub fn decrypt_file(
                     let ekey_b64 = base64::engine::general_purpose::STANDARD.encode(key_bytes);
                     (ekey_b64, key_start)
                 }
-                FooterInfo::Musicex {
-                    song_id, mid, ..
-                } => {
+                FooterInfo::Musicex { song_id, mid, .. } => {
                     let audio_len = if data.len() >= 16 && &data[data.len() - 8..] == b"musicex\x00"
                     {
                         let footer_size = u32::from_le_bytes(
@@ -316,23 +293,11 @@ pub fn decrypt_file(
 
                     if let Some(key) = ekey {
                         (key.to_string(), audio_len)
-                    } else if fetch_ekey {
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .map_err(|e| format!("Failed to create async runtime: {}", e))?;
-                        let fetched_ekey = rt.block_on(async { ekey_fetch::fetch_ekey(input_path).await })
-                            .map_err(|e| format!("{}", e))?;
-                        (fetched_ekey, audio_len)
                     } else {
                         return Err(format!(
                             "This file uses the newer 'musicex' format (song_id={}, mid={}).\n\
-                             The encryption key (ekey) is NOT embedded in the file.\n\n\
-                             You can either:\n\
-                             1. Provide the ekey via --ekey argument\n\
-                             2. Use --fetch-ekey to automatically fetch the ekey from QQ Music API\n\
-                                (requires QQ Music to be logged in on this computer)\n\n\
-                             Run with --info to see file metadata.",
+                             The encryption key (ekey) is not embedded in the file.\n\
+                             Provide it via the --ekey argument.",
                             song_id, mid
                         ));
                     }
@@ -340,18 +305,10 @@ pub fn decrypt_file(
                 FooterInfo::Unknown => {
                     if let Some(key) = ekey {
                         (key.to_string(), data.len())
-                    } else if fetch_ekey {
-                        return Err(
-                            "Cannot auto-fetch ekey: file does not have a musicex footer.\n\
-                             The --fetch-ekey option only works with musicex-format files.\n\
-                             Please provide the ekey via --ekey argument instead."
-                                .to_string(),
-                        );
                     } else {
                         return Err(
                             "Could not detect file footer format and no ekey provided.\n\
-                             Please provide the ekey via --ekey argument, or use --fetch-ekey \
-                             for musicex-format files."
+                             Please provide the ekey via --ekey argument."
                                 .to_string(),
                         );
                     }
@@ -379,62 +336,44 @@ pub fn decrypt_file(
     }
 }
 
-/// Get file metadata without decrypting
-pub fn info_file(input_path: &Path, format: Format, check_credentials: bool) -> Result<InfoResult, String> {
-    let data = fs::read(input_path)
-        .map_err(|e| format!("Failed to read {}: {}", input_path.display(), e))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let file_size = data.len();
-    let footer = detect_footer(&data);
-    let footer_info = if check_credentials {
-        // For musicex footers with credential check, we don't modify the FooterInfo
-        // — the caller can check credentials separately via get_qqmusic_credentials()
-        footer
-    } else {
-        footer
-    };
-
-    Ok(InfoResult {
-        input_path: input_path.to_path_buf(),
-        file_size,
-        format,
-        footer_info,
-    })
-}
-
-/// Process all supported files in a directory (batch mode).
-///
-/// Returns a list of results, one per file. Errors are captured per-file
-/// rather than aborting the entire batch.
-pub fn process_directory(
-    input_dir: &Path,
-    output_dir: Option<&Path>,
-    ekey: Option<&str>,
-    fetch_ekey: bool,
-) -> Vec<Result<DecryptResult, String>> {
-    let out = output_dir.unwrap_or(input_dir);
-    if !out.exists() {
-        if let Err(e) = fs::create_dir_all(out) {
-            return vec![Err(format!("Error creating output directory: {}", e))];
-        }
+    #[test]
+    fn format_lookup_is_case_insensitive() {
+        assert_eq!(Format::from_extension("MFLAC"), Some(Format::Mflac));
+        assert_eq!(Format::from_extension("qmcogg"), Some(Format::QmcOgg));
+        assert_eq!(Format::from_extension("mp3"), None);
     }
 
-    let mut results = Vec::new();
-
-    if let Ok(entries) = fs::read_dir(input_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if let Some(format) = Format::from_extension(ext) {
-                let out_path = determine_output_path(&path, Some(out), format);
-                let result = decrypt_file(&path, &out_path, format, ekey, fetch_ekey);
-                results.push(result);
+    #[test]
+    fn detects_musicex_footer() {
+        let mut metadata = vec![0u8; 0x90];
+        metadata[0..4].copy_from_slice(&42u32.to_le_bytes());
+        for (offset, value) in [(0x0c, "media-mid"), (0x48, "track.mflac")] {
+            for (index, code) in value.encode_utf16().enumerate() {
+                let start = offset + index * 2;
+                metadata[start..start + 2].copy_from_slice(&code.to_le_bytes());
             }
         }
-    }
+        let footer_size = (metadata.len() + 16) as u32;
+        let mut data = metadata;
+        data.extend_from_slice(&footer_size.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(b"musicex\0");
 
-    results
+        match detect_footer(&data) {
+            FooterInfo::Musicex {
+                song_id,
+                mid,
+                filename,
+            } => {
+                assert_eq!(song_id, 42);
+                assert_eq!(mid, "media-mid");
+                assert_eq!(filename, "track.mflac");
+            }
+            other => panic!("unexpected footer: {other:?}"),
+        }
+    }
 }

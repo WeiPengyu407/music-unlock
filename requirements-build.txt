@@ -1,0 +1,7 @@
+pyinstaller
+ttkbootstrap
+tkinterdnd2
+pycryptodome
+pillow
+gamdl
+scrapling[all]

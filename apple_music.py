@@ -2,6 +2,7 @@
 """Apple Music 链封装：wrapper-v2 容器(假安卓跑苹果官方解密库) + gamdl 下载。
 对外只暴露三件事：环境是否就绪、是否已登录、登录、下载。"""
 import http.client
+import gzip
 import json
 import os
 import re
@@ -183,12 +184,13 @@ def is_apple_url(text):
 
 
 def check_chain():
-    """按依赖顺序走查整条链：容器服务 → 解密引擎 → 登录态。
-    返回 (就绪?, 卡住的阶段, 说明)；阶段为 container / engine / auth。"""
+    """按依赖顺序走查整条链：容器服务 → 解密引擎 → 下载器 → 登录态。"""
     if not wrapper_up():
         return False, "container", "wrapper 服务未运行（容器 wrapper-v2 未启动）"
     if not playback_ready():
         return False, "engine", "解密引擎未就绪（playback_ready=false）"
+    if not (FROZEN or os.path.exists(GAMDL)):
+        return False, "downloader", "下载器 gamdl 未安装"
     if not is_logged_in():
         return False, "auth", "Apple ID 未登录或会话已失效"
     return True, None, ""
@@ -229,7 +231,7 @@ def download(url, outdir, progress_cb=None):
             on_line(line)
         p.wait(timeout=1800)
         rc = p.returncode
-    if rc == 0 and any("0 error(s)" in l for l in tail):
+    if rc == 0:
         return True, ""
     return False, (tail[-1][:80] if tail else "下载失败")
 
@@ -451,6 +453,57 @@ def _pkexec(*args):
         raise WrapperError(f"需要授权的系统操作失败：{' '.join(args)}（{r.stderr.strip()[:60]}）")
 
 
+def _install_docker_linux():
+    """用当前发行版已有的包管理器安装 Docker。"""
+    managers = (
+        ("zypper", ("--non-interactive", "install", "docker")),
+        ("apt-get", ("install", "-y", "docker.io")),
+        ("dnf", ("install", "-y", "docker")),
+        ("yum", ("install", "-y", "docker")),
+        ("pacman", ("-S", "--noconfirm", "docker")),
+    )
+    for manager, args in managers:
+        if shutil.which(manager):
+            if manager == "apt-get":
+                _pkexec("apt-get", "update")
+            _pkexec(manager, *args)
+            return
+    raise WrapperError("未找到支持的包管理器，请先安装 Docker 后重试")
+
+
+def _current_username():
+    """返回当前进程的真实系统用户名，不依赖可被覆盖的 USER 环境变量。"""
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError, OSError):
+        import getpass
+        return getpass.getuser()
+
+
+def _load_docker_image():
+    """不经过 shell 管道，把 gzip 镜像流直接交给 docker load。"""
+    last = None
+    for cmd in (["docker", "load"], ["sudo", "-n", "docker", "load"]):
+        process = None
+        try:
+            process = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            with gzip.open(IMAGE_TAR, "rb") as image:
+                shutil.copyfileobj(image, process.stdin, length=1024 * 1024)
+            process.stdin.close()
+            process.stdin = None
+            _stdout, stderr = process.communicate(timeout=900)
+            if process.returncode == 0:
+                return
+            last = stderr.decode("utf-8", "replace")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            if process is not None and process.poll() is None:
+                process.kill()
+            last = str(exc)
+    raise WrapperError("导入镜像失败：" + (last or "未知错误")[:80])
+
+
 def _expected_libs():
     """零件哈希表：开发环境在 wrapper 源码目录，打包环境在 bundle 资产里。
     按主机架构取 x86_64 或 arm64-v8a 分组。"""
@@ -516,17 +569,17 @@ def provisioned():
     """特殊解密引擎是否已装配好。"""
     # 快路径：引擎已经在跑就不必碰 docker CLI
     #（当前 GUI 会话可能还没继承 docker 组，但容器开着就够用）
+    gamdl_ok = FROZEN or os.path.exists(GAMDL)
     try:
-        if wrapper_up() and playback_ready():
+        if gamdl_ok and wrapper_up() and playback_ready():
             return True
     except Exception:
         pass
     # 慢路径：镜像 + 零件 + 下载器都在就算装配过（容器随时可拉起）
-    gamdl_ok = FROZEN or os.path.exists(GAMDL)
     if not (libs_staged() and gamdl_ok):
         return False
     try:
-        return bool(_docker("images", "-q", "wrapper-v2", timeout=15).stdout.strip())
+        return bool(_docker("images", "-q", _image_tag(), timeout=15).stdout.strip())
     except WrapperError:
         return False
 
@@ -537,7 +590,7 @@ def provision(progress_cb, apk_path=None):
     cb = progress_cb or (lambda t: None)
 
     # 快路径：引擎已经在跑，什么系统操作都不用做
-    if wrapper_up() and playback_ready():
+    if (FROZEN or os.path.exists(GAMDL)) and wrapper_up() and playback_ready():
         cb("特殊解密引擎已就绪")
         return
 
@@ -551,13 +604,13 @@ def provision(progress_cb, apk_path=None):
     else:
         if not shutil.which("docker"):
             cb("安装 Docker（需要授权）…")
-            _pkexec("zypper", "--non-interactive", "install", "docker")
+            _install_docker_linux()
         try:
             _docker("info", timeout=15)
         except WrapperError:
             cb("启动 Docker 服务（需要授权）…")
             _pkexec("systemctl", "enable", "--now", "docker")
-            _pkexec("usermod", "-aG", "docker", os.environ.get("USER", "pengyu"))
+            _pkexec("usermod", "-aG", "docker", _current_username())
             try:
                 _docker("info", timeout=15)
             except WrapperError:
@@ -565,21 +618,14 @@ def provision(progress_cb, apk_path=None):
 
     cb("检查解密引擎镜像…")
     try:
-        _docker("images", "-q", "wrapper-v2", timeout=15).stdout.strip()
-        have_image = bool(_docker("images", "-q", "wrapper-v2", timeout=15).stdout.strip())
+        have_image = bool(_docker("images", "-q", _image_tag(), timeout=15).stdout.strip())
     except WrapperError:
         have_image = False
     if not have_image:
         if not os.path.exists(IMAGE_TAR):
             raise WrapperError(f"缺少内置镜像包 {IMAGE_TAR}")
         cb("导入内置解密引擎镜像（约 1 分钟）…")
-        r = subprocess.run(f"gunzip -c '{IMAGE_TAR}' | docker load",
-                           shell=True, capture_output=True, text=True, timeout=900)
-        if r.returncode != 0:
-            r2 = subprocess.run(f"gunzip -c '{IMAGE_TAR}' | sudo -n docker load",
-                                shell=True, capture_output=True, text=True, timeout=900)
-            if r2.returncode != 0:
-                raise WrapperError("导入镜像失败：" + (r.stderr or r2.stderr)[:80])
+        _load_docker_image()
 
     cb("检查苹果解密零件…")
     if not libs_staged():
@@ -608,7 +654,7 @@ def provision(progress_cb, apk_path=None):
         for name in _expected_libs():
             cmd += ["-v", f"{os.path.join(LIBS_DIR, name)}:/app/rootfs/system/lib64/{name}"]
         cmd += ["-v", f"{DATA_DIR}:/app/rootfs/data/data/com.apple.android.music/files",
-                "wrapper-v2:latest"]
+                _image_tag()]
         _docker(*cmd, timeout=60)
 
     cb("检查下载器 gamdl…")
