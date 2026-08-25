@@ -136,12 +136,11 @@ jobs:
             python - <<'PY'
           from pathlib import Path
           root = Path("dist/music-unlock")
-          for name in ("music-unlock.exe", "um.exe", "qmc-decoder.exe"):
-              p = root / name
-              if not p.is_file():
-                  raise SystemExit(f"missing {p}")
-              print("ok", p)
-          for pattern in ("wrapper-v2-image.tar.gz", "LIBS_VERSION.json"):
+          exe = root / "music-unlock.exe"
+          if not exe.is_file():
+              raise SystemExit(f"missing {exe}")
+          print("ok", exe)
+          for pattern in ("um.exe", "qmc-decoder.exe", "wrapper-v2-image.tar.gz", "LIBS_VERSION.json"):
               hits = list(root.rglob(pattern))
               if not hits:
                   raise SystemExit(f"missing {pattern}")
