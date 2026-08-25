@@ -37,7 +37,7 @@ jobs:
             exit 1
           fi
           printf '%s\n' "${files[@]}"
-          notes=$'Windows x86_64 与 Apple Silicon 安装包。\n\n- Windows：安装版 exe 或便携 zip\n- macOS：Apple Silicon dmg'
+          notes=$'Windows / macOS / Linux 安装包。\n\n- Windows：portable zip\n- macOS：Apple Silicon 与 Intel dmg\n- Linux：x86_64 与 arm64 AppImage'
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
           else

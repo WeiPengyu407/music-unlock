@@ -37,10 +37,10 @@
 到 [Releases](../../releases) 页面下载对应系统的安装包：
 
 - **Windows**：`music-unlock-windows-x86_64-portable.zip`（便携版，解压即用）
-- **macOS**：`music-unlock-macos-arm64.dmg`（Apple Silicon）
-- **Linux**：`music-unlock-linux-x86_64.AppImage`（各发行版通用，`chmod +x` 后直接跑）
+- **macOS**：`music-unlock-macos-arm64.dmg`（Apple Silicon）或 `music-unlock-macos-x86_64.dmg`（Intel）
+- **Linux**：`music-unlock-linux-x86_64.AppImage` 或 `music-unlock-linux-arm64.AppImage`（`chmod +x` 后直接跑）
 
-Windows / macOS 由 GitHub Actions 构建；Linux AppImage 在 x86_64 机器上跑 `packaging/build-linux.sh`。
+安装包由 GitHub Actions 构建（`.github/workflows/build.yml`）。Linux 也可在本机跑 `packaging/build-linux.sh`。
 
 ## 使用方法
 

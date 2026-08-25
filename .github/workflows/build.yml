@@ -1,10 +1,10 @@
 name: build
 
-# Windows x86_64 + Apple Silicon macOS 安装包流水线。
-# 重资产策略：wrapper 镜像包 + 零件哈希表放在 GitHub Release "runtime-assets" 里
-# （本机 docker save 产出，一次性上传）；浏览器组件因每系统二进制不同，
-# 在各自 runner 上现场 patchright/camoufox 下载后打成内置 tar 包；
-# Python 依赖全部打进 App（冻结模式不需要 wheels 目录）。
+# 安装包：Win x86_64、macOS Apple Silicon、macOS Intel、Linux x86_64、Linux arm64。
+# 教训：camoufox 不要和 scrapling[all] 同一轮 pip；资产必须在冻结前打进包；
+# Windows 不要真跑 windowed --self-test；AppImage 不要 curl GitHub 下 runtime
+# （用 gh + --runtime-file）；产物文件名用 ASCII，否则 Release 会把中文吃掉。
+# wrapper 镜像 / LIBS_VERSION.json 在 Release "runtime-assets"。
 
 on:
   workflow_dispatch:
@@ -20,10 +20,22 @@ jobs:
           - os: windows-latest
             platform: windows
             arch: x86_64
-          - os: macos-14 # Apple Silicon（M 系列）：arm64 原生镜像 + arm64 零件
+          - os: macos-14
             platform: macos
             arch: arm64
+          - os: macos-15-intel
+            platform: macos
+            arch: x86_64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -31,10 +43,14 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Linux Tk
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-tk libtk8.6
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-          cache: false  # go 项目在构建期才 clone，仓库根没有 go.sum
+          cache: false
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -45,10 +61,8 @@ jobs:
 
       - name: 构建 um 引擎（Go）
         env:
-          GOPROXY: https://goproxy.cn,direct  # unlock-music.dev/mmkv 官方源 403，proxy.golang.org 未缓存，goproxy.cn 有缓存
+          GOPROXY: https://goproxy.cn,direct
         run: |
-          # 官方源 git.unlock-music.dev 有 Cloudflare 盾；GitHub 镜像被 DMCA 下架；
-          # 用 Codeberg 镜像（main 分支，比 tag 新）
           git clone --depth 1 https://codeberg.org/TTsdzb/unlock-music-cli.git /tmp/um-cli
           cd /tmp/um-cli
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -70,13 +84,14 @@ jobs:
         shell: bash
 
       - name: 下载运行时资产（wrapper 镜像 + 零件哈希表）
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p assets
-          BASE="https://github.com/${{ github.repository }}/releases/download/runtime-assets"
           TAR="wrapper-v2-image.tar.gz"
           [ "$RUNNER_ARCH" = "ARM64" ] && TAR="wrapper-v2-image-arm64.tar.gz"
-          curl -sfL "$BASE/$TAR" -o "assets/$TAR"
-          curl -sfL "$BASE/LIBS_VERSION.json" -o assets/LIBS_VERSION.json
+          gh release download runtime-assets -R "${{ github.repository }}" \
+            -p "$TAR" -p LIBS_VERSION.json -D assets --clobber
         shell: bash
 
       - name: 浏览器组件打成内置包（每系统各自的二进制）
@@ -132,7 +147,6 @@ jobs:
         timeout-minutes: 5
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            # windowed exe 在 GitHub Windows runner 上不会退出，不能真跑 --self-test
             python - <<'PY'
           from pathlib import Path
           root = Path("dist/music-unlock")
@@ -146,8 +160,10 @@ jobs:
                   raise SystemExit(f"missing {pattern}")
               print("ok", hits[0])
           PY
-          else
+          elif [ "$RUNNER_OS" = "macOS" ]; then
             dist/music-unlock.app/Contents/MacOS/music-unlock --self-test
+          else
+            dist/music-unlock/music-unlock --self-test
           fi
         shell: bash
 
@@ -158,20 +174,73 @@ jobs:
           $version = "${{ github.ref_name }}".TrimStart("v")
           if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.2" }
           iscc "/DAppVersion=$version" packaging/installer.iss
-          cd dist && 7z a "../音乐解锁-windows-x86_64-portable.zip" music-unlock && cd ..
+          cd dist && 7z a "../music-unlock-windows-x86_64-portable.zip" music-unlock && cd ..
 
       - name: 打包 macOS（dmg）
         if: matrix.platform == 'macos'
         run: |
           mkdir -p dmg-root && cp -r dist/music-unlock.app dmg-root/ || cp -r dist/music-unlock dmg-root/
-          hdiutil create -volname 音乐解锁 -srcfolder dmg-root -ov -format UDZO "音乐解锁-macos-${{ matrix.arch }}.dmg"
+          hdiutil create -volname 音乐解锁 -srcfolder dmg-root -ov -format UDZO "music-unlock-macos-${{ matrix.arch }}.dmg"
+
+      - name: 打包 Linux（AppImage）
+        if: matrix.platform == 'linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then AI_ARCH=aarch64; else AI_ARCH=x86_64; fi
+          rm -rf AppDir
+          mkdir -p AppDir/usr/bin
+          cp -a dist/music-unlock AppDir/usr/bin/music-unlock-dir
+          cp packaging/AppRun AppDir/AppRun && chmod +x AppDir/AppRun
+          cp packaging/music-unlock.desktop packaging/music-unlock.png AppDir/
+          gh release download continuous -R AppImage/appimagetool \
+            -p "appimagetool-${AI_ARCH}.AppImage" -D /tmp --clobber
+          chmod +x "/tmp/appimagetool-${AI_ARCH}.AppImage"
+          gh release download continuous -R AppImage/type2-runtime \
+            -p "runtime-${AI_ARCH}" -D /tmp --clobber
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          ARCH="$AI_ARCH" "/tmp/appimagetool-${AI_ARCH}.AppImage" \
+            --runtime-file "/tmp/runtime-${AI_ARCH}" --comp zstd \
+            AppDir "music-unlock-linux-${{ matrix.arch }}.AppImage"
+        shell: bash
 
       - uses: actions/upload-artifact@v4
         with:
-          name: 音乐解锁-${{ matrix.platform }}-${{ matrix.arch }}
+          name: music-unlock-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             *.AppImage
             *.zip
             *.dmg
             Output/*.exe
           if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          path: packages
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(find packages -type f)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no artifacts"
+            exit 1
+          fi
+          mkdir -p upload
+          for f in "${files[@]}"; do cp "$f" "upload/$(basename "$f")"; done
+          ls -lh upload
+          notes=$'Windows / macOS / Linux 安装包。\n\n- Windows：portable zip\n- macOS：Apple Silicon 与 Intel dmg\n- Linux：x86_64 与 arm64 AppImage'
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "$notes" \
+            upload/* || gh release upload "${{ github.ref_name }}" upload/* --clobber --repo "${{ github.repository }}"

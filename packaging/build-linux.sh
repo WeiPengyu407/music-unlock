@@ -4,10 +4,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 echo "=== 音乐解锁 Linux 构建 ==="
-uname -m | grep -qx x86_64 || { echo "本脚本只打 x86_64 AppImage"; exit 1; }
+case "$(uname -m)" in
+  x86_64) AI_ARCH=x86_64; OUT_ARCH=x86_64; TAR=wrapper-v2-image.tar.gz ;;
+  aarch64|arm64) AI_ARCH=aarch64; OUT_ARCH=arm64; TAR=wrapper-v2-image-arm64.tar.gz ;;
+  *) echo "不支持的架构: $(uname -m)"; exit 1 ;;
+esac
+echo "架构: $OUT_ARCH"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "缺少 $1"; exit 1; }; }
-need git; need python3; need go; need cargo; need curl; need tar
+need git; need python3; need go; need cargo; need curl; need tar; need gh
 
 VENV=/tmp/mu-linux-build-venv
 echo "=== 1/7 Python 依赖 ==="
@@ -36,12 +41,12 @@ fi
 
 echo "=== 4/7 下载运行时资产 + 打浏览器组件包 ==="
 mkdir -p assets/bundled
-if [ ! -s assets/wrapper-v2-image.tar.gz ]; then
-  if [ -s "$HOME/.local/share/music-unlock/wrapper-v2-image.tar.gz" ]; then
-    cp -f "$HOME/.local/share/music-unlock/wrapper-v2-image.tar.gz" assets/
+if [ ! -s "assets/$TAR" ]; then
+  if [ -s "$HOME/.local/share/music-unlock/$TAR" ]; then
+    cp -f "$HOME/.local/share/music-unlock/$TAR" assets/
   else
     gh release download runtime-assets -R WeiPengyu407/music-unlock \
-      -p 'wrapper-v2-image.tar.gz' -D assets --clobber
+      -p "$TAR" -D assets --clobber
   fi
 fi
 if [ ! -s assets/LIBS_VERSION.json ]; then
@@ -101,15 +106,14 @@ cp -a dist/music-unlock AppDir/usr/bin/music-unlock-dir
 cp packaging/AppRun AppDir/AppRun && chmod +x AppDir/AppRun
 cp packaging/music-unlock.desktop packaging/music-unlock.png AppDir/
 if [ ! -x /tmp/appimagetool ]; then
-  gh release download continuous -R AppImage/appimagetool -p 'appimagetool-x86_64.AppImage' -D /tmp --clobber
-  mv -f /tmp/appimagetool-x86_64.AppImage /tmp/appimagetool
+  gh release download continuous -R AppImage/appimagetool -p "appimagetool-${AI_ARCH}.AppImage" -D /tmp --clobber
+  mv -f "/tmp/appimagetool-${AI_ARCH}.AppImage" /tmp/appimagetool
   chmod +x /tmp/appimagetool
 fi
-if [ ! -s /tmp/runtime-x86_64 ]; then
-  gh release download continuous -R AppImage/type2-runtime -p 'runtime-x86_64' -D /tmp --clobber
+if [ ! -s "/tmp/runtime-${AI_ARCH}" ]; then
+  gh release download continuous -R AppImage/type2-runtime -p "runtime-${AI_ARCH}" -D /tmp --clobber
 fi
 export APPIMAGE_EXTRACT_AND_RUN=1
-ARCH=x86_64 /tmp/appimagetool --runtime-file /tmp/runtime-x86_64 --comp zstd AppDir music-unlock-linux-x86_64.AppImage
+ARCH="$AI_ARCH" /tmp/appimagetool --runtime-file "/tmp/runtime-${AI_ARCH}" --comp zstd AppDir "music-unlock-linux-${OUT_ARCH}.AppImage"
 echo ""
-echo "完成！产物：$(pwd)/music-unlock-linux-x86_64.AppImage"
-echo "各发行版：chmod +x 后双击或命令行运行即可。"
+echo "完成！产物：$(pwd)/music-unlock-linux-${OUT_ARCH}.AppImage"
