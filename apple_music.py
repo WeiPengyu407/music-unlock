@@ -3,6 +3,7 @@
 对外只暴露三件事：环境是否就绪、是否已登录、登录、下载。"""
 import http.client
 import gzip
+import glob
 import json
 import os
 import re
@@ -311,10 +312,10 @@ def ensure_scrapling(progress_cb=None):
         if PROXY:
             env["HTTP_PROXY"] = env["HTTPS_PROXY"] = PROXY
         r = subprocess.run([pip, "install", "--no-index", "--find-links", WHEELS_DIR,
-                            "scrapling[all]"],
+                            "scrapling[all]", "camoufox"],
                            capture_output=True, text=True, timeout=900)
         if r.returncode != 0:  # 离线包不齐就联网补
-            r = subprocess.run([pip, "install", "scrapling[all]>=0.4.14"],
+            r = subprocess.run([pip, "install", "scrapling[all]>=0.4.14", "camoufox"],
                                capture_output=True, text=True, timeout=900, env=env)
             if r.returncode != 0:
                 raise WrapperError("scrapling 安装失败：" + r.stderr.strip()[-60:])
@@ -330,11 +331,11 @@ def ensure_scrapling(progress_cb=None):
         (os.path.join(MU_DIR, "bundled", "browser-cache-camoufox.tar.gz"),
          os.path.dirname(camou_dir), camou_dir),
         (os.path.join(MU_DIR, "bundled", "browser-cache-patchright.tar.gz"),
-         pw_dir, os.path.join(pw_dir, "chromium_headless_shell-1228")),
+         pw_dir, os.path.join(pw_dir, "chromium_headless_shell-*")),
     ]
     missing = []
     for tar, into, check in bundled:
-        if os.path.exists(check):
+        if glob.glob(check):
             continue
         if os.path.exists(tar):
             os.makedirs(into, exist_ok=True)
@@ -342,7 +343,7 @@ def ensure_scrapling(progress_cb=None):
                                capture_output=True, text=True, timeout=900)
             if r.returncode != 0:
                 raise WrapperError(f"解包浏览器组件失败：{r.stderr.strip()[-60:]}")
-        else:
+        if not glob.glob(check):
             missing.append(check)
     if missing:
         cb("内置包不全，联网补下载浏览器组件…")

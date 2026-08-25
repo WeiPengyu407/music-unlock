@@ -633,12 +633,31 @@ if __name__ == "__main__":
     import apple_music
     apple_music.seed_assets()  # 首跑：bundle 内置资产落到运行时目录
     if "--self-test" in sys.argv:  # 打包自检：资产、引擎、冻结子进程、苹果链
-        print("镜像包:", os.path.exists(apple_music.IMAGE_TAR))
-        print("零件哈希表:", len(apple_music._expected_libs()))
-        print("引擎 um:", os.path.exists(UM), "| qmc-decoder:", os.path.exists(QMC))
+        failures = []
+        image_ok = os.path.exists(apple_music.IMAGE_TAR)
+        print("镜像包:", image_ok)
+        if not image_ok:
+            failures.append("镜像包")
+        try:
+            libs_count = len(apple_music._expected_libs())
+        except Exception:
+            libs_count = 0
+        print("零件哈希表:", libs_count)
+        if not libs_count:
+            failures.append("零件哈希表")
+        um_ok, qmc_ok = os.path.exists(UM), os.path.exists(QMC)
+        print("引擎 um:", um_ok, "| qmc-decoder:", qmc_ok)
+        if not um_ok:
+            failures.append("um")
+        if not qmc_ok:
+            failures.append("qmc-decoder")
         rc, tail = apple_music._module_run("gamdl", ["--version"])
         print("gamdl 子进程 rc =", rc, "|", tail[-1] if tail else "")
+        if rc != 0:
+            failures.append("gamdl")
         print("苹果链:", apple_music.check_chain())
+        if failures:
+            sys.exit("打包自检失败：" + "、".join(failures))
         sys.exit(0)
     for m, name in ((UM, "um"), (QMC, "qmc-decoder")):
         if not os.path.exists(m):

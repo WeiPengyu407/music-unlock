@@ -149,6 +149,23 @@ class AppleMusicTests(unittest.TestCase):
                 (False, "downloader", "下载器 gamdl 未安装"),
             )
 
+    def test_dynamic_patchright_cache_version_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            camoufox = Path(tmp, "camoufox")
+            playwright = Path(tmp, "ms-playwright")
+            camoufox.mkdir()
+            Path(playwright, "chromium_headless_shell-9999").mkdir(parents=True)
+            with mock.patch.multiple(
+                apple_music,
+                FROZEN=True,
+                _cache_dirs=mock.Mock(
+                    return_value=(str(camoufox), str(playwright))),
+            ):
+                apple_music.ensure_scrapling()
+
+            self.assertTrue(
+                Path(playwright, ".installed-by-music-unlock").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

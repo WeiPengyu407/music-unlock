@@ -37,10 +37,9 @@
 到 [Releases](../../releases) 页面下载对应系统的安装包：
 
 - **Windows**：`音乐解锁-setup-windows-x86_64.exe`（安装版）或 `*-portable.zip`（便携版，解压即用）
-- **macOS**：`音乐解锁-macos-x86_64.dmg`（Intel）或 `音乐解锁-macos-arm64.dmg`（Apple Silicon）
-- **Linux**：`音乐解锁-x86_64.AppImage`（`chmod +x` 后直接运行）
+- **macOS**：`音乐解锁-macos-arm64.dmg`（Apple Silicon）
 
-所有安装包均由 GitHub Actions 自动构建（见 `.github/workflows/build.yml`），
+Windows 和 Apple Silicon 安装包由 GitHub Actions 自动构建（见 `.github/workflows/build.yml`），
 构建日志公开可查。
 
 ## 使用方法

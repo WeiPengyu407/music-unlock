@@ -5,3 +5,4 @@ pycryptodome
 pillow
 gamdl
 scrapling[all]
+camoufox==0.5.5
