@@ -1,0 +1,39 @@
+name: release
+
+# 把一次成功的 build run 产物发到 GitHub Release。
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 成功的 build run id
+        required: true
+        type: string
+      tag:
+        description: 版本标签
+        required: true
+        default: v1.0.2
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.inputs.run_id }}
+          path: packages
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(find packages -type f)
+          printf '%s\n' "${files[@]}"
+          gh release create "${{ github.event.inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ github.event.inputs.tag }}" \
+            --notes $'Windows x86_64 与 Apple Silicon 安装包。\n\n- Windows：安装版 exe 或便携 zip\n- macOS：Apple Silicon dmg' \
+            "${files[@]}"
