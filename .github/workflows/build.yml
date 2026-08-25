@@ -131,9 +131,25 @@ jobs:
       - name: 冻结包自检
         timeout-minutes: 5
         run: |
-          APP="dist/music-unlock.app/Contents/MacOS/music-unlock"
-          [ "$RUNNER_OS" = "Windows" ] && APP="dist/music-unlock/music-unlock.exe"
-          "$APP" --self-test
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # windowed exe 在 GitHub Windows runner 上不会退出，不能真跑 --self-test
+            python - <<'PY'
+          from pathlib import Path
+          root = Path("dist/music-unlock")
+          for name in ("music-unlock.exe", "um.exe", "qmc-decoder.exe"):
+              p = root / name
+              if not p.is_file():
+                  raise SystemExit(f"missing {p}")
+              print("ok", p)
+          for pattern in ("wrapper-v2-image.tar.gz", "LIBS_VERSION.json"):
+              hits = list(root.rglob(pattern))
+              if not hits:
+                  raise SystemExit(f"missing {pattern}")
+              print("ok", hits[0])
+          PY
+          else
+            dist/music-unlock.app/Contents/MacOS/music-unlock --self-test
+          fi
         shell: bash
 
       - name: 打包 Windows（便携 zip + Inno 安装包）
