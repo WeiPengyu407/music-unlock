@@ -129,6 +129,7 @@ jobs:
         shell: bash
 
       - name: 冻结包自检
+        timeout-minutes: 5
         run: |
           APP="dist/music-unlock.app/Contents/MacOS/music-unlock"
           [ "$RUNNER_OS" = "Windows" ] && APP="dist/music-unlock/music-unlock.exe"

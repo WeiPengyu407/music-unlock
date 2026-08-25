@@ -651,10 +651,19 @@ if __name__ == "__main__":
             failures.append("um")
         if not qmc_ok:
             failures.append("qmc-decoder")
-        rc, tail = apple_music._module_run("gamdl", ["--version"])
-        print("gamdl 子进程 rc =", rc, "|", tail[-1] if tail else "")
-        if rc != 0:
-            failures.append("gamdl")
+        if sys.platform == "win32":
+            # windowed 冻结包再 spawn 子进程会在 Windows 上死锁
+            try:
+                import gamdl  # noqa: F401
+                print("gamdl 导入: ok")
+            except Exception as e:
+                print("gamdl 导入:", e)
+                failures.append("gamdl")
+        else:
+            rc, tail = apple_music._module_run("gamdl", ["--version"])
+            print("gamdl 子进程 rc =", rc, "|", tail[-1] if tail else "")
+            if rc != 0:
+                failures.append("gamdl")
         print("苹果链:", apple_music.check_chain())
         if failures:
             sys.exit("打包自检失败：" + "、".join(failures))
