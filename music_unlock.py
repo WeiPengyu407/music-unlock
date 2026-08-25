@@ -633,6 +633,10 @@ if __name__ == "__main__":
     import apple_music
     apple_music.seed_assets()  # 首跑：bundle 内置资产落到运行时目录
     if "--self-test" in sys.argv:  # 打包自检：资产、引擎、冻结子进程、苹果链
+        for stream in (sys.stdout, sys.stderr):
+            reconf = getattr(stream, "reconfigure", None)
+            if reconf:
+                reconf(encoding="utf-8", errors="replace")
         failures = []
         image_ok = os.path.exists(apple_music.IMAGE_TAR)
         print("镜像包:", image_ok)
