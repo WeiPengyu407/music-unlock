@@ -8,12 +8,6 @@ name: build
 
 on:
   workflow_dispatch:
-    inputs:
-      only:
-        description: 只编这一档 runner（windows-11-arm / windows-latest / …，空=全部）
-        required: false
-        type: string
-        default: ""
   push:
     tags: ["v*"]
 
@@ -41,7 +35,6 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == '' || inputs.only == matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     permissions:
