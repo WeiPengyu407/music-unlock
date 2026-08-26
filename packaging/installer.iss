@@ -2,7 +2,7 @@
 ; CI 中由 iscc 调用：dist\music-unlock\ 为 PyInstaller onedir 产物（含 assets）
 
 #ifndef AppVersion
-  #define AppVersion "1.0.2"
+  #define AppVersion "1.0.3"
 #endif
 
 [Setup]

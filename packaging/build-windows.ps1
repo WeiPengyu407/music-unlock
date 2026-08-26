@@ -39,26 +39,17 @@ Copy-Item vendor/qmc-decoder/target/release/qmc-decoder.exe .
 
 Write-Host "=== 4/6 PyInstaller 冻结 ==="
 pyinstaller --noconfirm --windowed --onedir --name music-unlock `
-  --hidden-import apkmirror_fetch --hidden-import PIL._tkinter_finder `
+  --hidden-import PIL._tkinter_finder `
   --collect-all ttkbootstrap --collect-all tkinterdnd2 `
-  --collect-all gamdl --collect-all scrapling --collect-all patchright --collect-all camoufox `
+  --collect-all gamdl `
   --add-binary "um.exe;." --add-binary "qmc-decoder.exe;." `
   music_unlock.py
 
-Write-Host "=== 5/6 下载运行时资产 + 打浏览器组件包 ==="
-New-Item -ItemType Directory -Force dist\music-unlock\assets\bundled | Out-Null
+Write-Host "=== 5/6 下载运行时资产 ==="
+New-Item -ItemType Directory -Force dist\music-unlock\assets | Out-Null
 $base = "https://github.com/WeiPengyu407/music-unlock/releases/download/runtime-assets"
 Invoke-WebRequest "$base/wrapper-v2-image.tar.gz" -OutFile dist\music-unlock\assets\wrapper-v2-image.tar.gz
 Invoke-WebRequest "$base/LIBS_VERSION.json" -OutFile dist\music-unlock\assets\LIBS_VERSION.json
-python -m patchright install chromium
-python -m camoufox fetch
-$camou = "$env:LOCALAPPDATA\camoufox"
-$pw = "$env:LOCALAPPDATA\ms-playwright"
-if (-not (Test-Path $camou)) { throw "没找到 camoufox 缓存目录 $camou，把 camoufox fetch 的输出位置告诉我" }
-tar -czf dist\music-unlock\assets\bundled\browser-cache-camoufox.tar.gz -C "$env:LOCALAPPDATA" camoufox
-$shell = (Get-ChildItem $pw -Directory | Where-Object Name -like 'chromium_headless_shell*' | Select-Object -First 1).Name
-$ff = (Get-ChildItem $pw -Directory | Where-Object Name -like 'ffmpeg*' | Select-Object -First 1).Name
-tar -czf dist\music-unlock\assets\bundled\browser-cache-patchright.tar.gz -C $pw $shell $ff
 
 Write-Host "=== 6/6 打便携包 ==="
 Compress-Archive -Force -Path dist\music-unlock -DestinationPath "音乐解锁-windows-x86_64-portable.zip"

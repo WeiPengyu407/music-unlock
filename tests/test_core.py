@@ -1,5 +1,6 @@
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -149,22 +150,21 @@ class AppleMusicTests(unittest.TestCase):
                 (False, "downloader", "下载器 gamdl 未安装"),
             )
 
-    def test_dynamic_patchright_cache_version_is_accepted(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            camoufox = Path(tmp, "camoufox")
-            playwright = Path(tmp, "ms-playwright")
-            camoufox.mkdir()
-            Path(playwright, "chromium_headless_shell-9999").mkdir(parents=True)
-            with mock.patch.multiple(
-                apple_music,
-                FROZEN=True,
-                _cache_dirs=mock.Mock(
-                    return_value=(str(camoufox), str(playwright))),
-            ):
-                apple_music.ensure_scrapling()
+    def test_apk_urls_try_cn_mirrors_before_github(self):
+        urls = apple_music._apk_urls()
+        self.assertTrue(urls[-1].startswith("https://github.com/"))
+        self.assertGreater(len(urls), 1)
+        self.assertTrue(all(u.endswith("apple-music-3.6.0-beta.apkm") for u in urls))
+        self.assertTrue(any("ghfast.top" in u for u in urls[:-1]))
 
-            self.assertTrue(
-                Path(playwright, ".installed-by-music-unlock").exists())
+    def test_fetch_apk_reuses_local_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp, "apple-music-3.6.0-beta.apkm")
+            cache.write_bytes(b"0" * 50_000_000)
+            with mock.patch.object(apple_music, "APK_CACHE", str(cache)):
+                with mock.patch.object(subprocess, "run") as run:
+                    self.assertEqual(apple_music.fetch_apk(), str(cache))
+                    run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -4,4 +4,3 @@ tkinterdnd2
 pycryptodome
 pillow
 gamdl
-scrapling[all]

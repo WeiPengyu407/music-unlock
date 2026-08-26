@@ -1,10 +1,10 @@
 name: build
 
 # 安装包：Win x86_64、macOS Apple Silicon、macOS Intel、Linux x86_64、Linux arm64。
-# 教训：camoufox 不要和 scrapling[all] 同一轮 pip；资产必须在冻结前打进包；
-# Windows 不要真跑 windowed --self-test；AppImage 不要 curl GitHub 下 runtime
-# （用 gh + --runtime-file）；产物文件名用 ASCII，否则 Release 会把中文吃掉。
-# wrapper 镜像 / LIBS_VERSION.json 在 Release "runtime-assets"。
+# 教训：资产必须在冻结前打进包；Windows 不要真跑 windowed --self-test；
+# AppImage 不要 curl GitHub 下 runtime（用 gh + --runtime-file）；
+# 产物文件名用 ASCII，否则 Release 会把中文吃掉。
+# wrapper 镜像 / LIBS_VERSION.json / APK 在 Release "runtime-assets"。
 
 on:
   workflow_dispatch:
@@ -55,9 +55,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Python 依赖
-        run: |
-          python -m pip install -r requirements-build.txt
-          python -m pip install camoufox==0.5.5
+        run: python -m pip install -r requirements-build.txt
 
       - name: 构建 um 引擎（Go）
         env:
@@ -94,50 +92,14 @@ jobs:
             -p "$TAR" -p LIBS_VERSION.json -D assets --clobber
         shell: bash
 
-      - name: 浏览器组件打成内置包（每系统各自的二进制）
-        run: |
-          python -m patchright install chromium
-          python -m camoufox fetch
-          python - <<'PY'
-          import os
-          import sys
-          import tarfile
-          from pathlib import Path
-
-          if sys.platform == "win32":
-              base = Path(os.environ["LOCALAPPDATA"])
-          elif sys.platform == "darwin":
-              base = Path.home() / "Library" / "Caches"
-          else:
-              base = Path.home() / ".cache"
-          camoufox = base / "camoufox"
-          playwright = base / "ms-playwright"
-          if not camoufox.is_dir():
-              raise SystemExit(f"camoufox cache not found: {camoufox}")
-          headless = next(iter(sorted(playwright.glob("chromium_headless_shell-*"))), None)
-          ffmpeg = next(iter(sorted(playwright.glob("ffmpeg-*"))), None)
-          if not headless or not ffmpeg:
-              raise SystemExit(f"patchright cache incomplete: {playwright}")
-
-          output = Path("assets") / "bundled"
-          output.mkdir(parents=True, exist_ok=True)
-          with tarfile.open(output / "browser-cache-camoufox.tar.gz", "w:gz") as archive:
-              archive.add(camoufox, arcname=camoufox.name)
-          with tarfile.open(output / "browser-cache-patchright.tar.gz", "w:gz") as archive:
-              archive.add(headless, arcname=headless.name)
-              archive.add(ffmpeg, arcname=ffmpeg.name)
-          PY
-        shell: bash
-
       - name: PyInstaller 冻结
         run: |
           BIN_UM="um"; BIN_QMC="qmc-decoder"; SEP=":"
           if [ "$RUNNER_OS" = "Windows" ]; then BIN_UM="um.exe"; BIN_QMC="qmc-decoder.exe"; SEP=";"; fi
           pyinstaller --noconfirm --windowed --onedir --name music-unlock \
-            --hidden-import apkmirror_fetch --hidden-import PIL._tkinter_finder \
+            --hidden-import PIL._tkinter_finder \
             --collect-all ttkbootstrap --collect-all tkinterdnd2 \
-            --collect-all gamdl --collect-all scrapling \
-            --collect-all patchright --collect-all camoufox \
+            --collect-all gamdl \
             --add-binary "$BIN_UM$SEP." --add-binary "$BIN_QMC$SEP." \
             --add-data "assets${SEP}assets" \
             music_unlock.py
@@ -172,7 +134,7 @@ jobs:
         run: |
           choco install innosetup --no-progress -y
           $version = "${{ github.ref_name }}".TrimStart("v")
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.2" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.3" }
           iscc "/DAppVersion=$version" packaging/installer.iss
           cd dist && 7z a "../music-unlock-windows-x86_64-portable.zip" music-unlock && cd ..
 

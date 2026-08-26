@@ -3,7 +3,6 @@
 对外只暴露三件事：环境是否就绪、是否已登录、登录、下载。"""
 import http.client
 import gzip
-import glob
 import json
 import os
 import re
@@ -14,8 +13,7 @@ WRAPPER_HOST = "127.0.0.1"
 WRAPPER_PORT = 80
 CONTAINER = "wrapper-v2"
 
-FROZEN = getattr(sys, "frozen", False)  # PyInstaller 冻结模式：gamdl/scrapling 已作
-                                        # 为 Python 模块打进 App，不再创建 venv
+FROZEN = getattr(sys, "frozen", False)  # PyInstaller 冻结模式：gamdl 已打进 App，不再建 venv
 
 # 打包后（PyInstaller）的内置资产目录；开发时回退到脚本目录
 BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -92,13 +90,13 @@ class WrapperError(Exception):
 
 
 def seed_assets(progress_cb=None):
-    """首跑播种：把 bundle 里的内置资产（镜像包/离线 wheel/浏览器组件包）
+    """首跑播种：把 bundle 里的内置资产（镜像包/离线 wheel）
     落到运行时目录 MU_DIR。已存在的跳过；开发环境（无 assets 目录）直接跳过。"""
     cb = progress_cb or (lambda t: None)
     if not os.path.isdir(ASSETS_SRC):
         return
     os.makedirs(MU_DIR, exist_ok=True)
-    for item in ("wrapper-v2-image.tar.gz", "wrapper-v2-image-arm64.tar.gz", "wheels", "bundled"):
+    for item in ("wrapper-v2-image.tar.gz", "wrapper-v2-image-arm64.tar.gz", "wheels"):
         src = os.path.join(ASSETS_SRC, item)
         dst = os.path.join(MU_DIR, item)
         if os.path.exists(src) and not os.path.exists(dst):
@@ -239,10 +237,10 @@ def download(url, outdir, progress_cb=None):
 
 
 # =====================================================================
-# 首次装配（provision）：除 APK 零件需当场向用户索取外，其余全部内置。
+# 首次装配（provision）：APK 从 GitHub Release（国内镜像）拉，拆件验哈希。
 # 内置物：预构建 Docker 镜像（只含 AOSP 系统件 + 解密程序，无苹果代码）、
-#         gamdl 离线 wheel 包、本脚本的全套自动化。
-# 当场搞：用户的 Apple Music APK → 拆 18 个 .so → 哈希校验 → 挂载进容器。
+#         gamdl 离线 wheel 包。安装包本身不含苹果代码。
+# 当场搞：下载 APK → 拆 18 个 .so → 哈希校验 → 挂载进容器。
 # =====================================================================
 import hashlib
 import shutil
@@ -276,154 +274,46 @@ IMAGE_TAR = os.path.join(
     else "wrapper-v2-image.tar.gz")
 GAMDL_VENV = os.path.join(_BASE, "gamdl-venv")
 GAMDL = _venv_tool(GAMDL_VENV, "gamdl")
-SCRAPLING_VENV = os.path.join(_BASE, "scrapling-venv")
-SCRAPLING_PY = _venv_tool(SCRAPLING_VENV, "python")
-SCRAPLING_MARKER = os.path.join(SCRAPLING_VENV, ".installed-by-music-unlock")
-PROXY = os.environ.get("MUSIC_UNLOCK_PROXY", "http://127.0.0.1:7897")
 APK_CACHE = os.path.join(MU_DIR, "apple-music-3.6.0-beta.apkm")
+_APK_GITHUB = (
+    "https://github.com/WeiPengyu407/music-unlock/releases/download/"
+    "runtime-assets/apple-music-3.6.0-beta.apkm")
+# 国内 GitHub 文件加速，用户不用自备代理。
+_APK_MIRRORS = (
+    "https://ghfast.top/",
+    "https://gh-proxy.com/",
+    "https://ghproxy.net/",
+)
 
 
-def _cache_dirs():
-    """patchright/camoufox 的浏览器缓存目录，按平台（CI 为每个系统打各自的内置包）。"""
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
-        return os.path.join(base, "camoufox"), os.path.join(base, "ms-playwright")
-    if sys.platform == "darwin":
-        base = os.path.expanduser("~/Library/Caches")
-        return os.path.join(base, "camoufox"), os.path.join(base, "ms-playwright")
-    base = os.path.expanduser("~/.cache")
-    return os.path.join(base, "camoufox"), os.path.join(base, "ms-playwright")
-
-
-def ensure_scrapling(progress_cb=None):
-    """反爬组件（scrapling + 隐身浏览器）是自动拉取 APK 的前提。
-    冻结模式：scrapling 已打进 App，只需安置浏览器组件。
-    开发模式：现场建 venv 装包。浏览器组件优先解内置 tar 包，缺失才联网下载。"""
-    cb = progress_cb or (lambda t: None)
-    if not FROZEN:
-        if os.path.exists(SCRAPLING_PY):
-            return
-        cb("安装反爬组件 scrapling（内置离线包）…")
-        r = subprocess.run(["python3", "-m", "venv", SCRAPLING_VENV],
-                           capture_output=True, text=True, timeout=300)
-        if r.returncode != 0:
-            raise WrapperError("创建 scrapling 环境失败：" + r.stderr.strip()[-60:])
-        pip = _venv_tool(SCRAPLING_VENV, "pip")
-        env = {**os.environ}
-        if PROXY:
-            env["HTTP_PROXY"] = env["HTTPS_PROXY"] = PROXY
-        r = subprocess.run([pip, "install", "--no-index", "--find-links", WHEELS_DIR,
-                            "scrapling[all]", "camoufox"],
-                           capture_output=True, text=True, timeout=900)
-        if r.returncode != 0:  # 离线包不齐就联网补
-            r = subprocess.run([pip, "install", "scrapling[all]>=0.4.14", "camoufox"],
-                               capture_output=True, text=True, timeout=900, env=env)
-            if r.returncode != 0:
-                raise WrapperError("scrapling 安装失败：" + r.stderr.strip()[-60:])
-    else:
-        env = {**os.environ}
-        if PROXY:
-            env["HTTP_PROXY"] = env["HTTPS_PROXY"] = PROXY
-
-    # 浏览器组件：优先解内置 tar 包（除 APK 外全内置原则），缺失才联网下载
-    cb("安置反爬浏览器组件（内置包）…")
-    camou_dir, pw_dir = _cache_dirs()
-    bundled = [
-        (os.path.join(MU_DIR, "bundled", "browser-cache-camoufox.tar.gz"),
-         os.path.dirname(camou_dir), camou_dir),
-        (os.path.join(MU_DIR, "bundled", "browser-cache-patchright.tar.gz"),
-         pw_dir, os.path.join(pw_dir, "chromium_headless_shell-*")),
-    ]
-    missing = []
-    for tar, into, check in bundled:
-        if glob.glob(check):
-            continue
-        if os.path.exists(tar):
-            os.makedirs(into, exist_ok=True)
-            r = subprocess.run(["tar", "-xzf", tar, "-C", into],
-                               capture_output=True, text=True, timeout=900)
-            if r.returncode != 0:
-                raise WrapperError(f"解包浏览器组件失败：{r.stderr.strip()[-60:]}")
-        if not glob.glob(check):
-            missing.append(check)
-    if missing:
-        cb("内置包不全，联网补下载浏览器组件…")
-        steps = [
-            (["-m", "patchright", "install", "chromium"], True),
-            (["-m", "patchright", "install-deps", "chromium"], False),
-            (["-m", "camoufox", "fetch"], True),
-        ]
-        for args, required in steps:
-            if FROZEN:
-                rc, tail = _module_run(args[1], args[2:])
-                ok = rc == 0
-                err = tail[-1] if tail else ""
-            else:
-                r = subprocess.run([SCRAPLING_PY, *args],
-                                   capture_output=True, text=True, timeout=3600, env=env)
-                ok = r.returncode == 0
-                err = r.stderr.strip()[-60:]
-            if not ok and required:
-                raise WrapperError(f"浏览器组件下载失败（{' '.join(args[1:3])}）：{err}")
-    # 打上"本程序所装"的标记：零件到手后 cleanup_scrapling 只清理由我们装的这份，
-    # 绝不动用户机器上可能已有的 scrapling/浏览器缓存。
-    if not FROZEN:
-        open(SCRAPLING_MARKER, "w").close()
-    for d in _cache_dirs():
-        if os.path.isdir(d):
-            open(os.path.join(d, ".installed-by-music-unlock"), "w").close()
-
-
-def cleanup_scrapling(progress_cb=None):
-    """APK 零件到手后，反爬浏览器组件（数 GB）使命已完成，卸掉。
-    只清理带本程序标记的那份；用户自己装过的一律不碰（缓存目录也各自带标记）。
-    冻结模式下 scrapling 代码在 App 内，无 venv 可卸。"""
-    if os.path.exists(SCRAPLING_MARKER):
-        shutil.rmtree(SCRAPLING_VENV, ignore_errors=True)
-    for d in _cache_dirs():
-        if os.path.isdir(d) and os.path.exists(os.path.join(d, ".installed-by-music-unlock")):
-            shutil.rmtree(d, ignore_errors=True)
+def _apk_urls():
+    return [p + _APK_GITHUB for p in _APK_MIRRORS] + [_APK_GITHUB]
 
 
 def fetch_apk(progress_cb=None):
-    """自动拉取 Apple Music 安装包（APKMirror，scrapling 穿透反爬 + curl 下直链）。
+    """从 GitHub Release（国内镜像优先）拉 Apple Music 安装包。
     安全性不靠下载源：拆件后 18 个 .so 逐个对 SHA-256，对不上就拒。"""
     cb = progress_cb or (lambda t: None)
-    ensure_scrapling(cb)  # 下载者的电脑上没有 scrapling 就现场装
-    cb("穿透反爬，定位安装包直链…")
-    if FROZEN:
-        # 冻结模式：scrapling 已打进 App，进程内直接调
-        try:
-            from apkmirror_fetch import get_direct_url
-            url = get_direct_url(PROXY or None)
-        except Exception as e:
-            raise WrapperError(f"自动定位下载地址失败：{e}")
-    else:
-        helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apkmirror_fetch.py")
-        try:
-            r = subprocess.run([SCRAPLING_PY, helper, PROXY],
-                               capture_output=True, text=True, timeout=300)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise WrapperError(f"自动定位下载地址失败：{e}")
-        url = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
-        if r.returncode != 0 or not url.startswith("http"):
-            raise WrapperError("自动定位下载地址失败：" + r.stderr.strip()[-60:])
+    if os.path.exists(APK_CACHE) and os.path.getsize(APK_CACHE) >= 50_000_000:
+        return APK_CACHE
     cb("下载 Apple Music 安装包（约 84MB）…")
     os.makedirs(MU_DIR, exist_ok=True)
-    cmd = ["curl", "-sfL", "-m", "600"]
-    if PROXY:
-        cmd += ["-x", PROXY]
-    cmd += [url,
-            "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "-H", "Referer: https://www.apkmirror.com/apk/apple/apple-music/"
-                  "apple-music-3-6-0-beta-release/apple-music-3-6-0-beta-4-android-apk-download/",
-            "-o", APK_CACHE]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=660)
-    if r.returncode != 0 or not os.path.exists(APK_CACHE) \
-            or os.path.getsize(APK_CACHE) < 50_000_000:
-        raise WrapperError("安装包下载失败")
-    return APK_CACHE
+    tmp = APK_CACHE + ".part"
+    try:
+        for url in _apk_urls():
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            r = subprocess.run(
+                ["curl", "-fL", "-m", "600", "--retry", "2", "-o", tmp, url],
+                capture_output=True, text=True, timeout=660)
+            if (r.returncode == 0 and os.path.exists(tmp)
+                    and os.path.getsize(tmp) >= 50_000_000):
+                os.replace(tmp, APK_CACHE)
+                return APK_CACHE
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    raise WrapperError("安装包下载失败")
 
 
 def _docker(*args, timeout=120, capture=True):
@@ -639,8 +529,6 @@ def provision(progress_cb, apk_path=None):
         cb("从 APK 拆取解密零件并校验…")
         n = stage_libs_from_apk(apk_path)
         cb(f"{n} 个零件校验通过")
-        cb("反爬组件已完成使命，清理…")
-        cleanup_scrapling()
 
     cb("启动解密容器…")
     ps = _docker("ps", "-a", "--format", "{{.Names}}", timeout=15).stdout.split()

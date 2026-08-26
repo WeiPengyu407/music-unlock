@@ -38,27 +38,19 @@ cp vendor/qmc-decoder/target/release/qmc-decoder .
 
 echo "=== 4/6 PyInstaller 冻结 ==="
 pyinstaller --noconfirm --windowed --onedir --name music-unlock \
-  --hidden-import apkmirror_fetch --hidden-import PIL._tkinter_finder \
+  --hidden-import PIL._tkinter_finder \
   --collect-all ttkbootstrap --collect-all tkinterdnd2 \
-  --collect-all gamdl --collect-all scrapling --collect-all patchright --collect-all camoufox \
+  --collect-all gamdl \
   --add-binary "um:." --add-binary "qmc-decoder:." \
   music_unlock.py
 
-echo "=== 5/6 下载运行时资产 + 打浏览器组件包 ==="
-mkdir -p dist/music-unlock/assets/bundled
+echo "=== 5/6 下载运行时资产 ==="
+mkdir -p dist/music-unlock/assets
 BASE="https://github.com/WeiPengyu407/music-unlock/releases/download/runtime-assets"
 TAR="wrapper-v2-image.tar.gz"
 [ "$ARCH" = "arm64" ] && TAR="wrapper-v2-image-arm64.tar.gz"
 curl -sfL "$BASE/$TAR" -o "dist/music-unlock/assets/$TAR"
 curl -sfL "$BASE/LIBS_VERSION.json" -o dist/music-unlock/assets/LIBS_VERSION.json
-python -m patchright install chromium
-python -m camoufox fetch
-CAMOU=~/Library/Caches/camoufox
-PW=~/Library/Caches/ms-playwright
-tar -czf dist/music-unlock/assets/bundled/browser-cache-camoufox.tar.gz -C ~/Library/Caches camoufox
-SHELL_DIR=$(ls "$PW" | grep chromium_headless_shell | head -1)
-FF_DIR=$(ls "$PW" | grep ffmpeg | head -1)
-tar -czf dist/music-unlock/assets/bundled/browser-cache-patchright.tar.gz -C "$PW" "$SHELL_DIR" "$FF_DIR"
 
 echo "=== 6/6 打 dmg ==="
 mkdir -p dmg-root

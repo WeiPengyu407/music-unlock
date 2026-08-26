@@ -15,17 +15,16 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "缺少 $1"; exit 1; }; }
 need git; need python3; need go; need cargo; need curl; need tar; need gh
 
 VENV=/tmp/mu-linux-build-venv
-echo "=== 1/7 Python 依赖 ==="
+echo "=== 1/6 Python 依赖 ==="
 python3 -m venv "$VENV"
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
-if ! python -c 'import PyInstaller, camoufox' >/dev/null 2>&1; then
+if ! python -c 'import PyInstaller' >/dev/null 2>&1; then
   python -m pip install -U pip
   python -m pip install -r requirements-build.txt
-  python -m pip install camoufox==0.5.5
 fi
 
-echo "=== 2/7 编译 um 引擎（Go） ==="
+echo "=== 2/6 编译 um 引擎（Go） ==="
 export GOPROXY=https://goproxy.cn,direct
 if [ ! -x um ]; then
   rm -rf /tmp/um-cli
@@ -33,14 +32,14 @@ if [ ! -x um ]; then
   (cd /tmp/um-cli && go build -o "$OLDPWD/um" ./cmd/um)
 fi
 
-echo "=== 3/7 编译 qmc-decoder 引擎（Rust） ==="
+echo "=== 3/6 编译 qmc-decoder 引擎（Rust） ==="
 if [ ! -x qmc-decoder ]; then
   cargo build --release --manifest-path vendor/qmc-decoder/Cargo.toml
   cp vendor/qmc-decoder/target/release/qmc-decoder .
 fi
 
-echo "=== 4/7 下载运行时资产 + 打浏览器组件包 ==="
-mkdir -p assets/bundled
+echo "=== 4/6 下载运行时资产 ==="
+mkdir -p assets
 if [ ! -s "assets/$TAR" ]; then
   if [ -s "$HOME/.local/share/music-unlock/$TAR" ]; then
     cp -f "$HOME/.local/share/music-unlock/$TAR" assets/
@@ -57,49 +56,20 @@ if [ ! -s assets/LIBS_VERSION.json ]; then
       -p 'LIBS_VERSION.json' -D assets --clobber
   fi
 fi
-if [ ! -f assets/bundled/browser-cache-camoufox.tar.gz ]; then
-  python -c 'from pathlib import Path; import sys; p=Path.home()/".cache"/"ms-playwright";
-print("cache", p); sys.exit(0 if any(p.glob("chromium_headless_shell-*")) else 1)' \
-    || python -m patchright install chromium
-  python -c 'from pathlib import Path; import sys; p=Path.home()/".cache"/"camoufox"; sys.exit(0 if p.is_dir() else 1)' \
-    || python -m camoufox fetch
-  python - <<'PY'
-import os, sys, tarfile
-from pathlib import Path
-base = Path.home() / ".cache"
-camoufox = base / "camoufox"
-playwright = base / "ms-playwright"
-if not camoufox.is_dir():
-    raise SystemExit(f"camoufox cache not found: {camoufox}")
-headless = next(iter(sorted(playwright.glob("chromium_headless_shell-*"))), None)
-ffmpeg = next(iter(sorted(playwright.glob("ffmpeg-*"))), None)
-if not headless or not ffmpeg:
-    raise SystemExit(f"patchright cache incomplete: {playwright}")
-output = Path("assets") / "bundled"
-output.mkdir(parents=True, exist_ok=True)
-with tarfile.open(output / "browser-cache-camoufox.tar.gz", "w:gz") as archive:
-    archive.add(camoufox, arcname=camoufox.name)
-with tarfile.open(output / "browser-cache-patchright.tar.gz", "w:gz") as archive:
-    archive.add(headless, arcname=headless.name)
-    archive.add(ffmpeg, arcname=ffmpeg.name)
-print("packed", camoufox, headless, ffmpeg)
-PY
-fi
 
-echo "=== 5/7 PyInstaller 冻结 ==="
+echo "=== 5/6 PyInstaller 冻结 ==="
 pyinstaller --noconfirm --windowed --onedir --name music-unlock \
-  --hidden-import apkmirror_fetch --hidden-import PIL._tkinter_finder \
+  --hidden-import PIL._tkinter_finder \
   --collect-all ttkbootstrap --collect-all tkinterdnd2 \
-  --collect-all gamdl --collect-all scrapling \
-  --collect-all patchright --collect-all camoufox \
+  --collect-all gamdl \
   --add-binary "um:." --add-binary "qmc-decoder:." \
   --add-data "assets:assets" \
   music_unlock.py
 
-echo "=== 6/7 冻结包自检 ==="
+echo "=== 6/6 冻结包自检 ==="
 dist/music-unlock/music-unlock --self-test
 
-echo "=== 7/7 打 AppImage ==="
+echo "=== 打包 AppImage ==="
 rm -rf AppDir
 mkdir -p AppDir/usr/bin
 cp -a dist/music-unlock AppDir/usr/bin/music-unlock-dir

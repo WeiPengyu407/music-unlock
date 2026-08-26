@@ -69,8 +69,8 @@
 4. 登录成功直接开始解密，输出在 `~/Music/已解锁`。
    之后再添加链接零打扰，直接解密
 
-> 中国大陆网络环境下，自动拉取 APK 需要代理（默认 `127.0.0.1:7897`，
-> 可用环境变量 `MUSIC_UNLOCK_PROXY` 修改）；拉取失败会退化为手动选择 APK 文件。
+> 安装包从 GitHub Release 拉取（国内走 ghfast / gh-proxy 镜像，不用自备代理）；
+> 失败会退化为手动选择 APK 文件。
 
 ## 常见问题
 
@@ -113,6 +113,6 @@ python3 music_unlock.py
 - [um](https://git.unlock-music.dev/um/cli)（unlock-music CLI, Go）
 - qmc-decoder（Rust, GPL-3.0）：`vendor/qmc-decoder`（核心库）+ 本项目自写 CLI 封装
 - [gamdl](https://github.com/glomatico/gamdl)（Apple Music 下载）、[wrapper-v2](https://github.com/glomatico/wrapper-v2)（FairPlay 运行时）
-- [scrapling](https://github.com/D4Vinci/Scrapling)（反爬抓取）、ttkbootstrap、tkinterdnd2、pycryptodome
+- ttkbootstrap、tkinterdnd2、pycryptodome
 
 本项目以 GPL-3.0 开源（含 GPL-3.0 授权的 vendored 组件）。
