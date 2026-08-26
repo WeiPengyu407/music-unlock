@@ -112,14 +112,18 @@ jobs:
         timeout-minutes: 5
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            python - <<'PY'
+            TAR="wrapper-v2-image.tar.gz"
+            [ "${{ matrix.arch }}" = "arm64" ] && TAR="wrapper-v2-image-arm64.tar.gz"
+            python - "$TAR" <<'PY'
+          import sys
           from pathlib import Path
+          tar = sys.argv[1]
           root = Path("dist/music-unlock")
           exe = root / "music-unlock.exe"
           if not exe.is_file():
               raise SystemExit(f"missing {exe}")
           print("ok", exe)
-          for pattern in ("um.exe", "qmc-decoder.exe", "wrapper-v2-image.tar.gz", "LIBS_VERSION.json"):
+          for pattern in ("um.exe", "qmc-decoder.exe", tar, "LIBS_VERSION.json"):
               hits = list(root.rglob(pattern))
               if not hits:
                   raise SystemExit(f"missing {pattern}")
