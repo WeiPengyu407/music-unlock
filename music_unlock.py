@@ -53,7 +53,7 @@ FONT = ("Microsoft YaHei UI", "Noto Sans CJK SC")
 ENCRYPTED_EXTS = {
     ".ncm", ".qmc0", ".qmc2", ".qmc3", ".qmc4", ".qmc6", ".qmc8", ".qmcflac", ".qmcogg",
     ".kgm", ".kgma", ".kgg", ".kwm", ".xm", ".x2m", ".x3m", ".tkm",
-    ".tm0", ".tm2", ".tm3", ".tm6", ".vpr", ".mmp4",
+    ".tm0", ".tm2", ".tm3", ".tm6", ".vpr", ".mmp4", ".mg3d",
 }
 ENCRYPTED_PREFIXES = (".mflac", ".mgg", ".bkc", ".kgm")
 
@@ -590,6 +590,9 @@ class App(ttk.Window):
             return apple_music.download(path, self.outdir, progress_cb=self.set_status)
         self.outdir = os.path.join(os.path.dirname(path) or ".", OUT_NAME)
         ext = os.path.splitext(path)[1].lower()
+        if ext == ".mg3d":
+            import mg3d
+            return mg3d.mg3d_decrypt(path, self.outdir)
         if ext.startswith((".mgg", ".mflac")):
             import qmc_ekey
             info = qmc_ekey.parse_musicex_footer(path)
