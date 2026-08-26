@@ -36,7 +36,7 @@
 
 到 [Releases](../../releases) 页面下载对应系统的安装包：
 
-- **Windows**：`music-unlock-windows-x86_64-portable.zip`（便携版，解压即用）
+- **Windows**：`music-unlock-windows-x86_64-portable.zip`（Intel/AMD）或 `music-unlock-windows-arm64-portable.zip`（Surface Laptop 等 ARM）
 - **macOS**：`music-unlock-macos-arm64.dmg`（Apple Silicon）或 `music-unlock-macos-x86_64.dmg`（Intel）
 - **Linux**：`music-unlock-linux-x86_64.AppImage` 或 `music-unlock-linux-arm64.AppImage`（`chmod +x` 后直接跑）
 

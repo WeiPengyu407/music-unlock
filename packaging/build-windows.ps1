@@ -48,11 +48,13 @@ pyinstaller --noconfirm --windowed --onedir --name music-unlock `
 Write-Host "=== 5/6 下载运行时资产 ==="
 New-Item -ItemType Directory -Force dist\music-unlock\assets | Out-Null
 $base = "https://github.com/WeiPengyu407/music-unlock/releases/download/runtime-assets"
-Invoke-WebRequest "$base/wrapper-v2-image.tar.gz" -OutFile dist\music-unlock\assets\wrapper-v2-image.tar.gz
+$tar = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'wrapper-v2-image-arm64.tar.gz' } else { 'wrapper-v2-image.tar.gz' }
+Invoke-WebRequest "$base/$tar" -OutFile "dist\music-unlock\assets\$tar"
 Invoke-WebRequest "$base/LIBS_VERSION.json" -OutFile dist\music-unlock\assets\LIBS_VERSION.json
 
 Write-Host "=== 6/6 打便携包 ==="
-Compress-Archive -Force -Path dist\music-unlock -DestinationPath "音乐解锁-windows-x86_64-portable.zip"
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x86_64' }
+Compress-Archive -Force -Path dist\music-unlock -DestinationPath "音乐解锁-windows-$arch-portable.zip"
 Write-Host ""
-Write-Host "完成！产物：$(Get-Location)\音乐解锁-windows-x86_64-portable.zip" -ForegroundColor Green
+Write-Host "完成！产物：$(Get-Location)\音乐解锁-windows-$arch-portable.zip" -ForegroundColor Green
 Write-Host "把这个 zip 发回去就行。"

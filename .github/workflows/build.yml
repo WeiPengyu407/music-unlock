@@ -1,6 +1,6 @@
 name: build
 
-# 安装包：Win x86_64、macOS Apple Silicon、macOS Intel、Linux x86_64、Linux arm64。
+# 安装包：Win x86_64 / arm64、macOS Apple Silicon / Intel、Linux x86_64 / arm64。
 # 教训：资产必须在冻结前打进包；Windows 不要真跑 windowed --self-test；
 # AppImage 不要 curl GitHub 下 runtime（用 gh + --runtime-file）；
 # 产物文件名用 ASCII，否则 Release 会把中文吃掉。
@@ -8,6 +8,12 @@ name: build
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: 只编这一档 runner（windows-11-arm / windows-latest / …，空=全部）
+        required: false
+        type: string
+        default: ""
   push:
     tags: ["v*"]
 
@@ -20,6 +26,9 @@ jobs:
           - os: windows-latest
             platform: windows
             arch: x86_64
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
           - os: macos-14
             platform: macos
             arch: arm64
@@ -32,6 +41,7 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == '' || inputs.only == matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     permissions:
@@ -135,8 +145,9 @@ jobs:
           choco install innosetup --no-progress -y
           $version = "${{ github.ref_name }}".TrimStart("v")
           if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.3" }
-          iscc "/DAppVersion=$version" packaging/installer.iss
-          cd dist && 7z a "../music-unlock-windows-x86_64-portable.zip" music-unlock && cd ..
+          $arch = "${{ matrix.arch }}"
+          iscc "/DAppVersion=$version" "/DAppArch=$arch" packaging/installer.iss
+          cd dist && 7z a "../music-unlock-windows-$arch-portable.zip" music-unlock && cd ..
 
       - name: 打包 macOS（dmg）
         if: matrix.platform == 'macos'
@@ -200,7 +211,7 @@ jobs:
           mkdir -p upload
           for f in "${files[@]}"; do cp "$f" "upload/$(basename "$f")"; done
           ls -lh upload
-          notes=$'Windows / macOS / Linux 安装包。\n\n- Windows：portable zip\n- macOS：Apple Silicon 与 Intel dmg\n- Linux：x86_64 与 arm64 AppImage'
+          notes=$'Windows / macOS / Linux 安装包。\n\n- Windows：x86_64 与 arm64 portable zip\n- macOS：Apple Silicon 与 Intel dmg\n- Linux：x86_64 与 arm64 AppImage'
           gh release create "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
