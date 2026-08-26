@@ -1,8 +1,8 @@
 ; 音乐解锁 Windows 安装包（Inno Setup）
-; CI 中由 iscc 调用：dist\music-unlock\ 为 PyInstaller onedir 产物（含 assets）
+; Source 相对 .iss 所在目录；CI 在仓库根目录调用 iscc。
 
 #ifndef AppVersion
-  #define AppVersion "1.0.3"
+  #define AppVersion "1.0.4"
 #endif
 #ifndef AppArch
   #define AppArch "x86_64"
@@ -14,8 +14,8 @@ AppVersion={#AppVersion}
 AppPublisher=music-unlock
 DefaultDirName={autopf}\音乐解锁
 DefaultGroupName=音乐解锁
-OutputDir=Output
-OutputBaseFilename=音乐解锁-setup-windows-{#AppArch}
+OutputDir=..\Output
+OutputBaseFilename=music-unlock-setup-windows-{#AppArch}
 Compression=lzma2
 SolidCompression=yes
 #if AppArch == "arm64"
@@ -27,7 +27,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 #endif
 
 [Files]
-Source: "dist\music-unlock\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "..\dist\music-unlock\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
 Name: "{autoprograms}\音乐解锁"; Filename: "{app}\music-unlock.exe"

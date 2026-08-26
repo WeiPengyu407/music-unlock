@@ -141,7 +141,7 @@ jobs:
         run: |
           choco install innosetup --no-progress -y
           $version = "${{ github.ref_name }}".TrimStart("v")
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.3" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.4" }
           $arch = "${{ matrix.arch }}"
           iscc "/DAppVersion=$version" "/DAppArch=$arch" packaging/installer.iss
           cd dist && 7z a "../music-unlock-windows-$arch-portable.zip" music-unlock && cd ..
@@ -150,7 +150,11 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           mkdir -p dmg-root && cp -r dist/music-unlock.app dmg-root/ || cp -r dist/music-unlock dmg-root/
-          hdiutil create -volname 音乐解锁 -srcfolder dmg-root -ov -format UDZO "music-unlock-macos-${{ matrix.arch }}.dmg"
+          for i in 1 2 3 4 5; do
+            hdiutil create -volname 音乐解锁 -srcfolder dmg-root -ov -format UDZO "music-unlock-macos-${{ matrix.arch }}.dmg" && break
+            sleep 8
+          done
+          test -s "music-unlock-macos-${{ matrix.arch }}.dmg"
 
       - name: 打包 Linux（AppImage）
         if: matrix.platform == 'linux'
