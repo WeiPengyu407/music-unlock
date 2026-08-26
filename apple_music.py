@@ -208,6 +208,7 @@ def download(url, outdir, progress_cb=None):
             "--wrapper-url", f"http://{WRAPPER_HOST}:{WRAPPER_PORT}",
             "--wrapper-decrypt-host", WRAPPER_HOST,
             "--wrapper-decrypt-port", "10020",
+            "--song-codec-priority", "alac,aac",  # 无损优先，拿不到无损才退 AAC
             "--output-path", outdir, url]
 
     def on_line(line):
