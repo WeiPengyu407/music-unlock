@@ -143,6 +143,8 @@ class App(ttk.Window):
         bar2.pack(fill="x")
         ttk.Button(bar2, text="导入QQ登录态", bootstyle=(SECONDARY, OUTLINE),
                    command=self.import_qq).pack(side="left")
+        ttk.Button(bar2, text="导入酷狗密钥库", bootstyle=(SECONDARY, OUTLINE),
+                   command=self.import_kgg_db).pack(side="left", padx=6)
         ttk.Button(bar2, text="检查Apple解密链", bootstyle=(SECONDARY, OUTLINE),
                    command=self.apple_prepare).pack(side="left", padx=6)
 
@@ -602,10 +604,42 @@ class App(ttk.Window):
                            capture_output=True, text=True)
         if r.returncode == 0:
             return True, ""
+        if ext == ".kgg":
+            return self.unlock_kgg(path)
         if ext.startswith((".mgg", ".mflac")):
             return self.unlock_qmc2(path)
         why = (r.stderr or r.stdout).strip().splitlines()
         return False, (why[-1] if why else "未知错误")
+
+    def unlock_kgg(self, path):
+        """新版 .kgg：密钥在酷狗 PC 客户端的 KGMusicV3.db（win32 v11）里，
+        um 带 --kgg-db 才能解。先自动找库，找不到就引导用户导入。"""
+        import kgg
+        if not self.outdir:
+            self.outdir = os.path.join(os.path.dirname(path) or ".", OUT_NAME)
+        db = kgg.find_db()
+        if not db:
+            return False, "需要酷狗密钥库 KGMusicV3.db（点「导入酷狗密钥库」）"
+        r = subprocess.run([UM, "-i", path, "-o", self.outdir, "--overwrite",
+                            "--kgg-db", db],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return True, ""
+        why = (r.stderr or r.stdout).strip().splitlines()
+        return False, (why[-1] if why else "KGG 解密失败")
+
+    def import_kgg_db(self):
+        from tkinter import filedialog as _fd
+        f = _fd.askopenfilename(
+            title="选择酷狗密钥库 KGMusicV3.db（酷狗PC客户端数据目录里）",
+            filetypes=[("酷狗密钥库", "*.db"), ("所有文件", "*")])
+        if f:
+            import kgg
+            kgg.set_db(f)
+            failed = sum(1 for it in self.items if it[2].startswith(" ✗"))
+            tip = f"已导入酷狗密钥库（{os.path.basename(f)}）"
+            tip += "，再点「开始转换」重试失败项" if failed else "，kgg 直接解"
+            self.status.config(text=tip)
 
     def unlock_qmc2(self, path, info=None):
         import qmc_ekey
