@@ -141,7 +141,7 @@ jobs:
         run: |
           choco install innosetup --no-progress -y
           $version = "${{ github.ref_name }}".TrimStart("v")
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.4" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { $version = "1.0.5" }
           $arch = "${{ matrix.arch }}"
           iscc "/DAppVersion=$version" "/DAppArch=$arch" packaging/installer.iss
           cd dist && 7z a "../music-unlock-windows-$arch-portable.zip" music-unlock && cd ..

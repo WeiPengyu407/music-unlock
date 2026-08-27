@@ -24,7 +24,7 @@ jobs:
 
       - name: Test Python
         run: |
-          python -m py_compile music_unlock.py apple_music.py qmc_ekey.py browser_cookies.py
+          python -m py_compile music_unlock.py apple_music.py qmc_ekey.py browser_cookies.py kgg.py mg3d.py
           python -m unittest discover -s tests -v
 
       - name: Test Rust

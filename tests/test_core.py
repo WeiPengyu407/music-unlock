@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT))
 
 import apple_music
 import browser_cookies
+import kgg
+import mg3d
 import music_unlock
 import qmc_ekey
 
@@ -21,6 +23,8 @@ class FileDetectionTests(unittest.TestCase):
     def test_only_known_encrypted_extensions_are_accepted(self):
         self.assertTrue(music_unlock.is_music_file("song.ncm"))
         self.assertTrue(music_unlock.is_music_file("song.mflac0"))
+        self.assertTrue(music_unlock.is_music_file("song.mg3d"))
+        self.assertTrue(music_unlock.is_music_file("song.kgg"))
         self.assertFalse(music_unlock.is_music_file("README"))
         self.assertFalse(music_unlock.is_music_file("song.mp3"))
 
@@ -165,6 +169,65 @@ class AppleMusicTests(unittest.TestCase):
                 with mock.patch.object(subprocess, "run") as run:
                     self.assertEqual(apple_music.fetch_apk(), str(cache))
                     run.assert_not_called()
+
+
+def _tiny_wav():
+    data = b"\x00\x00" * 80
+    header = b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt "
+    header += struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
+    header += b"data" + struct.pack("<I", len(data))
+    return header + data
+
+
+class Mg3dTests(unittest.TestCase):
+    def test_synthetic_wav_roundtrip(self):
+        wav = _tiny_wav()
+        key = b"0123456789ABCDEF0123456789ABCDEF"
+        self.assertEqual(wav[0x40:0x60], b"\x00" * 32)
+        enc = bytes((b + key[i % 32]) & 0xFF for i, b in enumerate(wav))
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp, "song.mg3d")
+            src.write_bytes(enc)
+            ok, out = mg3d.mg3d_decrypt(str(src), tmp)
+            self.assertTrue(ok, out)
+            self.assertEqual(Path(out).read_bytes(), wav)
+
+    def test_garbage_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "nope.mg3d").write_bytes(b"not a mg3d file" * 20)
+            ok, why = mg3d.mg3d_decrypt(str(Path(tmp, "nope.mg3d")), tmp)
+            self.assertFalse(ok)
+            self.assertIn("密钥", why)
+
+
+class KggDbTests(unittest.TestCase):
+    def test_first_scan_returns_the_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp, "KuGou8")
+            nested.mkdir()
+            db = nested / "KGMusicV3.db"
+            db.write_bytes(b"x")
+            confdir = Path(tmp, "conf")
+            with mock.patch.multiple(
+                kgg,
+                ROOTS=[tmp],
+                MU_DIR=str(confdir),
+                CONF=str(confdir / "kgg_db_path.txt"),
+            ):
+                found = kgg.find_db()
+            self.assertEqual(found, str(db))
+            self.assertEqual((confdir / "kgg_db_path.txt").read_text(), str(db))
+
+    def test_missing_db_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            confdir = Path(tmp, "conf")
+            with mock.patch.multiple(
+                kgg,
+                ROOTS=[tmp],
+                MU_DIR=str(confdir),
+                CONF=str(confdir / "kgg_db_path.txt"),
+            ):
+                self.assertIsNone(kgg.find_db())
 
 
 if __name__ == "__main__":

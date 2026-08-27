@@ -36,7 +36,8 @@ def _valid_header(h):
 
 def mg3d_decrypt(path, outdir):
     """返回 (成功与否, 输出路径或失败原因)。"""
-    buf = open(path, "rb").read()
+    with open(path, "rb") as f:
+        buf = f.read()
     header = buf[:0x100]
     key = None
     for off in range(SEG, SEG * 20, SEG):
@@ -51,5 +52,6 @@ def mg3d_decrypt(path, outdir):
     data = _sub(buf, key)
     os.makedirs(outdir, exist_ok=True)
     out = os.path.join(outdir, os.path.splitext(os.path.basename(path))[0] + ".wav")
-    open(out, "wb").write(data)
+    with open(out, "wb") as f:
+        f.write(data)
     return True, out

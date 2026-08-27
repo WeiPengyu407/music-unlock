@@ -11,7 +11,7 @@ on:
       tag:
         description: 版本标签
         required: true
-        default: v1.0.4
+        default: v1.0.5
         type: string
 
 jobs:

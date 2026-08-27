@@ -5,11 +5,16 @@ KGMusicV3.db 中（与 QQ musicex 把 ekey 锁进 mmkv 同一套路）。
 本模块负责在常见位置自动找库，并记住用户手动选定的库路径。"""
 import os
 
-MU_DIR = os.path.expanduser("~/.local/share/music-unlock")
+if os.name == "nt":
+    MU_DIR = os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local")),
+        "music-unlock")
+else:
+    MU_DIR = os.path.expanduser("~/.local/share/music-unlock")
 CONF = os.path.join(MU_DIR, "kgg_db_path.txt")
 DB_NAME = "KGMusicV3.db"
 
-# 常见根目录：CrossOver/Wine 里的 Windows 盘、以及偶发的本地安装位置
+# Linux/Wine 常见根 + Windows 原生 AppData（酷狗 v11 密钥库通常在这里）
 ROOTS = [
     "~/.cxoffice",
     "~/.wine",
@@ -17,26 +22,36 @@ ROOTS = [
     "~/Applications",
     "~/Downloads",
 ]
-SUBSTRINGS = ("kugou", "KuGou", "酷狗")
+if os.name == "nt":
+    ROOTS.extend(p for p in (
+        os.environ.get("APPDATA"),
+        os.environ.get("LOCALAPPDATA"),
+    ) if p)
+
+SKIP_DIRS = {
+    "windows", "system32", "syswow64", "winsxs", "node_modules",
+    ".git", "$recycle.bin", "temp", "tmp",
+}
 
 
 def _remember(path):
     os.makedirs(MU_DIR, exist_ok=True)
     with open(CONF, "w") as f:
         f.write(path)
+    return path
 
 
 def saved_db():
     try:
-        p = open(CONF).read().strip()
+        with open(CONF) as f:
+            p = f.read().strip()
         return p if p and os.path.exists(p) else None
     except OSError:
         return None
 
 
 def set_db(path):
-    _remember(path)
-    return path
+    return _remember(path)
 
 
 def find_db():
@@ -50,6 +65,7 @@ def find_db():
             continue
         for dirpath, dirnames, filenames in os.walk(root):
             depth = dirpath[len(root):].count(os.sep)
+            dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS]
             if depth > 6:
                 dirnames[:] = []
                 continue
