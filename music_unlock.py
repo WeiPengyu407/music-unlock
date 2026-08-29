@@ -105,6 +105,8 @@ class App(ttk.Window):
         self.items = []
         self.outdir = None
         self._qq_prompted = False
+        self._kgg_prompted = False
+        self._kgg_retry = False
         self._apple_prompted = False
 
         style = ttk.Style()
@@ -143,8 +145,8 @@ class App(ttk.Window):
         bar2.pack(fill="x")
         ttk.Button(bar2, text="导入QQ登录态", bootstyle=(SECONDARY, OUTLINE),
                    command=self.import_qq).pack(side="left")
-        ttk.Button(bar2, text="导入酷狗密钥库", bootstyle=(SECONDARY, OUTLINE),
-                   command=self.import_kgg_db).pack(side="left", padx=6)
+        ttk.Button(bar2, text="导入酷狗登录态", bootstyle=(SECONDARY, OUTLINE),
+                   command=self.import_kgg).pack(side="left", padx=6)
         ttk.Button(bar2, text="检查Apple解密链", bootstyle=(SECONDARY, OUTLINE),
                    command=self.apple_prepare).pack(side="left", padx=6)
 
@@ -211,13 +213,16 @@ class App(ttk.Window):
             self.items.append([fp, disp, ""])
             self.listbox.insert("end", disp)
             added += 1
-        if added and self.need_qq_login():
-            if not self._qq_prompted:
-                self._qq_prompted = True
-                self.qq_detect_prompt()
-        else:
-            n = len(self.items)
-            self.status.config(text=f"共 {n} 个文件待转换" if added else "没识别到加密音乐文件")
+        if not added:
+            self.status.config(text="没识别到加密音乐文件")
+            return
+        self.status.config(text=f"共 {len(self.items)} 个文件待转换")
+        if self.need_qq_login() and not self._qq_prompted:
+            self._qq_prompted = True
+            self.qq_detect_prompt()
+        if self.need_kgg() and not self._kgg_prompted:
+            self._kgg_prompted = True
+            self.kgg_detect_prompt()
 
     def add_apple_urls(self, urls):
         import apple_music
@@ -288,6 +293,8 @@ class App(ttk.Window):
         self.items.clear()
         self.listbox.delete(0, "end")
         self._qq_prompted = False
+        self._kgg_prompted = False
+        self._kgg_retry = False
         self._apple_prompted = False
         self.status.config(text="已清空")
 
@@ -327,6 +334,54 @@ class App(ttk.Window):
             "需要登录",
             [("请在", "normal"), ("音乐文件来源方", "bold"), ("官网上登录，以便本程序进行解密。", "normal")],
             [("我已登录，重新导入", PRIMARY, self.import_qq), ("稍后再说", SECONDARY, lambda: None)])
+
+    # ---------- 酷狗：跟 QQ 同一套，静默找客户端数据，失败才请来源方登录 ----------
+    def need_kgg(self):
+        if not any(os.path.splitext(it[0])[1].lower() == ".kgg" for it in self.items):
+            return False
+        import kgg
+        return kgg.find_db() is None
+
+    def kgg_detect_prompt(self):
+        self._dialog(
+            "需要酷狗登录态",
+            [("检测到 ", "normal"), ("酷狗新版加密格式", "bold"), ("，需要先导入酷狗登录态才能解密。", "normal")],
+            [("导入酷狗登录态", PRIMARY, self.import_kgg), ("稍后再说", SECONDARY, lambda: None)])
+
+    def import_kgg(self):
+        import kgg
+        db = kgg.find_db()
+        if db:
+            self._kgg_retry = False
+            self._kgg_ok()
+            return
+        if self._kgg_retry:
+            self._kgg_retry = False
+            f = filedialog.askopenfilename(
+                title="本机没找到酷狗客户端数据，请选一下客户端目录里的文件",
+                filetypes=[("数据文件", "*.db"), ("所有文件", "*")])
+            if f:
+                kgg.set_db(f)
+                self._kgg_ok()
+            else:
+                self.status.config(text="未找到酷狗客户端数据")
+            return
+        self._kgg_retry = True
+        if not open_external("https://www.kugou.com"):
+            self.status.config(text="无法打开浏览器，请手动访问 https://www.kugou.com")
+        self.kgg_login_prompt()
+
+    def kgg_login_prompt(self):
+        self._dialog(
+            "需要登录",
+            [("请在", "normal"), ("音乐文件来源方", "bold"), ("客户端登录（酷狗音乐 PC 版），以便本程序进行解密。", "normal")],
+            [("我已登录，重新导入", PRIMARY, self.import_kgg), ("稍后再说", SECONDARY, lambda: None)])
+
+    def _kgg_ok(self):
+        failed = sum(1 for it in self.items if it[2].startswith(" ✗"))
+        tip = "已导入酷狗登录态"
+        tip += "，再点「开始转换」重试失败项" if failed else "，kgg 直接解"
+        self.status.config(text=tip)
 
     # ---------- Apple：首次装配 + 三级链 ----------
     def apple_state(self):
@@ -612,14 +667,12 @@ class App(ttk.Window):
         return False, (why[-1] if why else "未知错误")
 
     def unlock_kgg(self, path):
-        """新版 .kgg：密钥在酷狗 PC 客户端的 KGMusicV3.db（win32 v11）里，
-        um 带 --kgg-db 才能解。先自动找库，找不到就引导用户导入。"""
         import kgg
         if not self.outdir:
             self.outdir = os.path.join(os.path.dirname(path) or ".", OUT_NAME)
         db = kgg.find_db()
         if not db:
-            return False, "需要酷狗密钥库 KGMusicV3.db（点「导入酷狗密钥库」）"
+            return False, "需要酷狗登录态（点「导入酷狗登录态」）"
         r = subprocess.run([UM, "-i", path, "-o", self.outdir, "--overwrite",
                             "--kgg-db", db],
                            capture_output=True, text=True)
@@ -627,19 +680,6 @@ class App(ttk.Window):
             return True, ""
         why = (r.stderr or r.stdout).strip().splitlines()
         return False, (why[-1] if why else "KGG 解密失败")
-
-    def import_kgg_db(self):
-        from tkinter import filedialog as _fd
-        f = _fd.askopenfilename(
-            title="选择酷狗密钥库 KGMusicV3.db（酷狗PC客户端数据目录里）",
-            filetypes=[("酷狗密钥库", "*.db"), ("所有文件", "*")])
-        if f:
-            import kgg
-            kgg.set_db(f)
-            failed = sum(1 for it in self.items if it[2].startswith(" ✗"))
-            tip = f"已导入酷狗密钥库（{os.path.basename(f)}）"
-            tip += "，再点「开始转换」重试失败项" if failed else "，kgg 直接解"
-            self.status.config(text=tip)
 
     def unlock_qmc2(self, path, info=None):
         import qmc_ekey

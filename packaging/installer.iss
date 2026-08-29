@@ -2,7 +2,7 @@
 ; Source 相对 .iss 所在目录；CI 在仓库根目录调用 iscc。
 
 #ifndef AppVersion
-  #define AppVersion "1.0.5"
+  #define AppVersion "1.0.6"
 #endif
 #ifndef AppArch
   #define AppArch "x86_64"

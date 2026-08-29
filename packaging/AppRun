@@ -2,4 +2,9 @@
 # 音乐解锁 AppImage 启动器。资产播种（bundle → ~/.local/share/music-unlock）
 # 由应用内的 apple_music.seed_assets() 完成，这里只做转发。
 HERE="$(dirname "$(readlink -f "$0")")"
+# PyInstaller 把 msgcat 放在 _tcl_data/tcl8/*.tm，冻结 Tcl 默认去 _internal/tcl8/ 找。
+# 对不上时 ttkbootstrap 2.x 启动会报 invalid command name "::msgcat::mcmset"。
+TM="$HERE/usr/bin/music-unlock-dir/_internal/_tcl_data/tcl8"
+export TCL8_6_TM_PATH="${TCL8_6_TM_PATH:+$TCL8_6_TM_PATH:}$TM"
+export TCL8_5_TM_PATH="${TCL8_5_TM_PATH:+$TCL8_5_TM_PATH:}$TM"
 exec "$HERE/usr/bin/music-unlock-dir/music-unlock" "$@"
