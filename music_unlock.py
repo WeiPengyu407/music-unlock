@@ -12,14 +12,13 @@ import os
 import subprocess
 import sys
 import threading
-import tkinter as tk
-from tkinter import filedialog
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import win32compat
+win32compat.enable_dpi_awareness()  # 必须在 tkinter 之前，否则 150% 缩放下发糊
 
-for _p in __import__("glob").glob(os.path.expanduser("~/.local/share/mu-venv/lib/python*/site-packages")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+import tkinter as tk
+from tkinter import filedialog
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import PRIMARY, SECONDARY, OUTLINE
@@ -28,17 +27,27 @@ _BUNDLE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 
 
 def _engine(name):
-    """解密引擎二进制：打包后优先用 bundle 内置的，否则回退 ~/.local/bin。"""
+    """解密引擎二进制：打包后优先用 bundle 内置的，否则源码旁 / 开发机 PATH。"""
     exe = name + (".exe" if sys.platform == "win32" else "")
-    for p in (os.path.join(_BUNDLE, exe), os.path.expanduser(os.path.join("~/.local/bin", exe))):
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(_BUNDLE, exe),
+        os.path.join(here, exe),
+    ]
+    if name == "qmc-decoder":
+        candidates.append(os.path.join(here, "vendor", "qmc-decoder", "target", "release", exe))
+    if sys.platform != "win32":
+        candidates.append(os.path.expanduser(os.path.join("~/.local/bin", exe)))
+    for p in candidates:
         if os.path.exists(p):
             return p
-    return os.path.expanduser(os.path.join("~/.local/bin", exe))
+    return candidates[0]
 
 
 UM = _engine("um")
 QMC = _engine("qmc-decoder")
 OUT_NAME = "已解锁"
+_NOWIN = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 # ---- Fluent (Office 2024) 配色 ----
 BG = "#FFFFFF"
@@ -48,7 +57,7 @@ ACCENT_HOVER = "#115EA3"
 TEXT = "#1B1B1B"
 MUTED = "#616161"
 BORDER = "#E1DFDD"
-FONT = ("Microsoft YaHei UI", "Noto Sans CJK SC")
+FONT = ("Microsoft YaHei UI", "Noto Sans CJK SC") if sys.platform == "win32" else ("Noto Sans CJK SC", "Microsoft YaHei UI")
 
 ENCRYPTED_EXTS = {
     ".ncm", ".qmc0", ".qmc2", ".qmc3", ".qmc4", ".qmc6", ".qmc8", ".qmcflac", ".qmcogg",
@@ -66,8 +75,9 @@ def is_music_file(path):
 def collect(paths):
     out = []
     for p in paths:
+        p = os.path.normpath(p)
         if os.path.isdir(p):
-            for root, _dirs, files in os.walk(p):
+            for root, _dirs, files in os.walk(p, onerror=lambda *_: None):
                 for f in files:
                     fp = os.path.join(root, f)
                     if is_music_file(fp):
@@ -170,8 +180,10 @@ class App(ttk.Window):
 
         try:
             from tkinterdnd2 import DND_FILES, TkinterDnD
+            TkinterDnD.require(self)
             for widget in (self, self.listbox):
-                TkinterDnD.TkinterDnD(widget).register_drop_target(widget, DND_FILES, self.on_drop)
+                widget.drop_target_register(DND_FILES)
+                widget.dnd_bind("<<Drop>>", self.on_drop)
         except Exception:
             pass
 
@@ -219,10 +231,10 @@ class App(ttk.Window):
         self.status.config(text=f"共 {len(self.items)} 个文件待转换")
         if self.need_qq_login() and not self._qq_prompted:
             self._qq_prompted = True
-            self.qq_detect_prompt()
-        if self.need_kgg() and not self._kgg_prompted:
+            threading.Thread(target=self._qq_silent_import, daemon=True).start()
+        if self._has_kgg() and not self._kgg_prompted:
             self._kgg_prompted = True
-            self.kgg_detect_prompt()
+            threading.Thread(target=self._kgg_silent_find, daemon=True).start()
 
     def add_apple_urls(self, urls):
         import apple_music
@@ -261,12 +273,15 @@ class App(ttk.Window):
                  font=_font(9), bg=BG, fg=MUTED).pack(anchor="w", pady=(6, 4))
         text = tk.Text(body, width=58, height=6, font=_font(9), relief="solid", bd=1)
         text.pack(fill="x")
+
+        def submit():
+            lines = text.get("1.0", "end").splitlines()
+            top.destroy()
+            self.add_apple_urls(lines)
+
         btns = ttk.Frame(top, style="App.TFrame", padding=(0, 12, 0, 14))
         btns.pack(fill="x")
-        ttk.Button(btns, text="添加", bootstyle=PRIMARY,
-                   command=lambda: (top.destroy(),
-                                    self.add_apple_urls(text.get("1.0", "end").splitlines()))
-                   ).pack(side="left", padx=6)
+        ttk.Button(btns, text="添加", bootstyle=PRIMARY, command=submit).pack(side="left", padx=6)
         ttk.Button(btns, text="取消", bootstyle=SECONDARY,
                    command=top.destroy).pack(side="left")
         top.update_idletasks()
@@ -287,7 +302,7 @@ class App(ttk.Window):
             self.add([d])
 
     def on_drop(self, event):
-        self.add(self.tk.splitlist(event.data))
+        self.add(win32compat.parse_drop_paths(self.tk.splitlist(event.data)))
 
     def clear(self):
         self.items.clear()
@@ -304,10 +319,22 @@ class App(ttk.Window):
             return False
         try:
             import qmc_ekey
-            uin, authst = qmc_ekey.load_credentials()
+            uin, authst = qmc_ekey.saved_credentials()
             return not (uin and authst)
         except Exception:
             return True
+
+    def _qq_silent_import(self):
+        import qmc_ekey
+        try:
+            uin, _authst, src = qmc_ekey.import_credentials()
+        except Exception:
+            uin, src = None, None
+        if uin:
+            self.after(0, lambda: self.status.config(
+                text=f"已从{src}导入 QQ 登录态，可直接解密"))
+        else:
+            self.after(0, self.qq_detect_prompt)
 
     def qq_detect_prompt(self):
         self._dialog(
@@ -316,31 +343,36 @@ class App(ttk.Window):
             [("导入QQ登录态", PRIMARY, self.import_qq), ("稍后再说", SECONDARY, lambda: None)])
 
     def import_qq(self):
-        import qmc_ekey, browser_cookies
-        uin, authst = qmc_ekey.import_from_browser()
+        import qmc_ekey
+        uin, _authst, src = qmc_ekey.import_credentials()
         if uin:
-            _, _, src = browser_cookies.find_qq_credentials()
             failed = sum(1 for it in self.items if it[2].startswith(" ✗"))
-            tip = f"已从 {src} 导入 QQ 登录态（uin={uin}）"
-            tip += "，再点「开始转换」重试失败项" if failed else "，musicex 直接解"
+            tip = f"已从{src}导入 QQ 登录态"
+            tip += "，再点「开始转换」重试失败项" if failed else "，可直接解密"
             self.status.config(text=tip)
         else:
-            if not open_external("https://y.qq.com"):
-                self.status.config(text="无法打开浏览器，请手动访问 https://y.qq.com")
             self.login_prompt()
 
     def login_prompt(self):
         self._dialog(
             "需要登录",
-            [("请在", "normal"), ("音乐文件来源方", "bold"), ("官网上登录，以便本程序进行解密。", "normal")],
+            [("请先打开", "normal"), ("QQ 音乐", "bold"), ("并登录，然后点重新导入。", "normal")],
             [("我已登录，重新导入", PRIMARY, self.import_qq), ("稍后再说", SECONDARY, lambda: None)])
 
     # ---------- 酷狗：跟 QQ 同一套，静默找客户端数据，失败才请来源方登录 ----------
-    def need_kgg(self):
-        if not any(os.path.splitext(it[0])[1].lower() == ".kgg" for it in self.items):
-            return False
+    def _has_kgg(self):
+        return any(os.path.splitext(it[0])[1].lower() == ".kgg" for it in self.items)
+
+    def _kgg_silent_find(self):
         import kgg
-        return kgg.find_db() is None
+        try:
+            db = kgg.find_db()
+        except Exception:
+            db = None
+        if db:
+            self.after(0, lambda: self.status.config(text="已找到酷狗客户端数据，kgg 直接解"))
+        else:
+            self.after(0, self.kgg_detect_prompt)
 
     def kgg_detect_prompt(self):
         self._dialog(
@@ -367,8 +399,6 @@ class App(ttk.Window):
                 self.status.config(text="未找到酷狗客户端数据")
             return
         self._kgg_retry = True
-        if not open_external("https://www.kugou.com"):
-            self.status.config(text="无法打开浏览器，请手动访问 https://www.kugou.com")
         self.kgg_login_prompt()
 
     def kgg_login_prompt(self):
@@ -500,8 +530,8 @@ class App(ttk.Window):
             return
         self._dialog(
             "Apple 解密环境未就绪",
-            [("走查卡在", "normal"), (detail, "bold"),
-             ("。可先确认 Docker 服务与 wrapper-v2 容器状态。", "normal")],
+            [("现在还不能下：", "normal"), (detail, "bold"),
+             ("。装好 Docker 并点「检查Apple解密链」再试。", "normal")],
             [("重试", PRIMARY, self.apple_prepare), ("稍后再说", SECONDARY, lambda: None)])
 
     def _apple_ready_tip(self):
@@ -612,55 +642,74 @@ class App(ttk.Window):
         self.status.after(0, lambda: self.status.config(text=text))
 
     def work(self):
-        pending = [
-            (index, item[0])
-            for index, item in enumerate(self.items)
-            if not item[2].strip().startswith("✓")
-        ]
         ok = sum(1 for item in self.items if item[2].strip().startswith("✓"))
         fail = 0
-        n = len(pending)
-        if not pending:
-            self.set_status("全部任务已成功，无需重试")
+        try:
+            pending = [
+                (index, item[0])
+                for index, item in enumerate(self.items)
+                if not item[2].strip().startswith("✓")
+            ]
+            n = len(pending)
+            if not pending:
+                self.set_status("全部任务已成功，无需重试")
+                return
+            for position, (index, path) in enumerate(pending, 1):
+                self.set_status(f"[{position}/{n}] {os.path.basename(path)}")
+                try:
+                    good, why = self.unlock(path)
+                except Exception as exc:
+                    good, why = False, str(exc)
+                if good:
+                    ok += 1
+                    self.set_row(index, " ✓")
+                else:
+                    fail += 1
+                    self.set_row(index, f" ✗ {why[:50]}")
+            self.set_status(f"完成：成功 {ok}，失败 {fail}" + (f"（输出在「{OUT_NAME}」）" if ok else ""))
+        except Exception as exc:
+            self.set_status(f"转换中断：{exc}")
+        finally:
+            if ok and self.outdir:
+                self.open_btn.after(0, lambda: self.open_btn.config(state="normal"))
             self.run_btn.after(0, lambda: self.run_btn.config(state="normal"))
-            return
-        for position, (index, path) in enumerate(pending, 1):
-            self.set_status(f"[{position}/{n}] {os.path.basename(path)}")
-            good, why = self.unlock(path)
-            if good:
-                ok += 1
-                self.set_row(index, " ✓")
-            else:
-                fail += 1
-                self.set_row(index, f" ✗ {why[:50]}")
-        self.set_status(f"完成：成功 {ok}，失败 {fail}" + (f"（输出在「{OUT_NAME}」）" if ok else ""))
-        if ok and self.outdir:
-            self.open_btn.after(0, lambda: self.open_btn.config(state="normal"))
-        self.run_btn.after(0, lambda: self.run_btn.config(state="normal"))
 
     def unlock(self, path):
         import apple_music
+        fallback = os.path.join(os.path.expanduser("~/Music"), OUT_NAME)
         if apple_music.is_apple_url(path):
-            self.outdir = os.path.join(os.path.expanduser("~/Music"), OUT_NAME)
+            self.outdir = win32compat.writable_dir(
+                fallback,
+                os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                             "music-unlock", OUT_NAME))
             if not apple_music.is_logged_in():
                 return False, "解密链未就绪（点「检查Apple解密链」）"
             return apple_music.download(path, self.outdir, progress_cb=self.set_status)
-        self.outdir = os.path.join(os.path.dirname(path) or ".", OUT_NAME)
+        why = win32compat.hydrate(path)
+        if why:
+            return False, why
+        self.outdir = win32compat.writable_dir(
+            os.path.join(os.path.dirname(path) or ".", OUT_NAME), fallback)
         ext = os.path.splitext(path)[1].lower()
+        src, dest = win32compat.for_child(path), win32compat.for_child(self.outdir)
         if ext == ".mg3d":
             import mg3d
             return mg3d.mg3d_decrypt(path, self.outdir)
+        if ext == ".kgg":
+            return self.unlock_kgg(path)
         if ext.startswith((".mgg", ".mflac")):
             import qmc_ekey
             info = qmc_ekey.parse_musicex_footer(path)
             if info:
                 return self.unlock_qmc2(path, info)
-        r = subprocess.run([UM, "-i", path, "-o", self.outdir, "--overwrite"],
-                           capture_output=True, text=True)
+        try:
+            r = subprocess.run([UM, "-i", src, "-o", dest, "--overwrite"],
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", creationflags=_NOWIN)
+        except FileNotFoundError:
+            return False, "安装不完整，缺少解密引擎，请重新下载安装包"
         if r.returncode == 0:
             return True, ""
-        if ext == ".kgg":
-            return self.unlock_kgg(path)
         if ext.startswith((".mgg", ".mflac")):
             return self.unlock_qmc2(path)
         why = (r.stderr or r.stdout).strip().splitlines()
@@ -669,13 +718,24 @@ class App(ttk.Window):
     def unlock_kgg(self, path):
         import kgg
         if not self.outdir:
-            self.outdir = os.path.join(os.path.dirname(path) or ".", OUT_NAME)
+            self.outdir = win32compat.writable_dir(
+                os.path.join(os.path.dirname(path) or ".", OUT_NAME),
+                os.path.join(os.path.expanduser("~/Music"), OUT_NAME))
         db = kgg.find_db()
         if not db:
             return False, "需要酷狗登录态（点「导入酷狗登录态」）"
-        r = subprocess.run([UM, "-i", path, "-o", self.outdir, "--overwrite",
-                            "--kgg-db", db],
-                           capture_output=True, text=True)
+        try:
+            db = kgg.usable_db(db)
+        except OSError:
+            return False, "酷狗正在使用数据文件，请先退出酷狗再试"
+        try:
+            r = subprocess.run([UM, "-i", win32compat.for_child(path),
+                                "-o", win32compat.for_child(self.outdir), "--overwrite",
+                                "--kgg-db", db],
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", creationflags=_NOWIN)
+        except FileNotFoundError:
+            return False, "安装不完整，缺少解密引擎，请重新下载安装包"
         if r.returncode == 0:
             return True, ""
         why = (r.stderr or r.stdout).strip().splitlines()
@@ -691,8 +751,13 @@ class App(ttk.Window):
             ekey = qmc_ekey.fetch_ekey(media_mid, filename)
         except qmc_ekey.EkeyFetchError as exc:
             return False, str(exc)
-        r = subprocess.run([QMC, "--ekey", ekey, path, self.outdir],
-                           capture_output=True, text=True)
+        try:
+            r = subprocess.run([QMC, "--ekey", ekey, win32compat.for_child(path),
+                                win32compat.for_child(self.outdir)],
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", creationflags=_NOWIN)
+        except FileNotFoundError:
+            return False, "安装不完整，缺少解密引擎，请重新下载安装包"
         if r.returncode == 0:
             return True, ""
         why = (r.stderr or r.stdout).strip().splitlines()
@@ -749,7 +814,16 @@ if __name__ == "__main__":
         if failures:
             sys.exit("打包自检失败：" + "、".join(failures))
         sys.exit(0)
-    for m, name in ((UM, "um"), (QMC, "qmc-decoder")):
-        if not os.path.exists(m):
-            sys.exit(f"缺少解密引擎 {m}")
+    missing = [name for path, name in ((UM, "um"), (QMC, "qmc-decoder")) if not os.path.exists(path)]
+    if missing:
+        msg = "安装不完整，缺少解密引擎。请重新下载安装包。"
+        try:
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("音乐解锁", msg)
+            root.destroy()
+        except Exception:
+            sys.stderr.write(msg + "\n")
+        sys.exit(1)
     App().mainloop()

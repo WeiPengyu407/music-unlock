@@ -39,6 +39,7 @@ Copy-Item vendor/qmc-decoder/target/release/qmc-decoder.exe .
 
 Write-Host "=== 4/6 PyInstaller 冻结 ==="
 pyinstaller --noconfirm --windowed --onedir --name music-unlock `
+  --noupx --manifest packaging/music-unlock.manifest `
   --hidden-import PIL._tkinter_finder `
   --collect-all ttkbootstrap --collect-all tkinterdnd2 `
   --collect-all gamdl `

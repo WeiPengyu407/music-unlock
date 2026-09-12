@@ -8,12 +8,24 @@
 import json
 import os
 import struct
+import sys
 import urllib.error
 import urllib.request
 
 API = "https://u.y.qq.com/cgi-bin/musicu.fcg"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-CONF = os.path.expanduser("~/.config/music-unlock/qqmusic.json")
+
+
+def default_conf_path():
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser(r"~\AppData\Roaming")
+        return os.path.join(base, "music-unlock", "qqmusic.json")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/music-unlock/qqmusic.json")
+    return os.path.expanduser("~/.config/music-unlock/qqmusic.json")
+
+
+CONF = default_conf_path()
 
 
 class EkeyFetchError(Exception):
@@ -64,7 +76,8 @@ def fetch_ekey(media_mid, filename, uin=None, authst=None, cookies=None):
         headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
     req = urllib.request.Request(API, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=15) as r:
             d = json.loads(r.read())
         info = d["req_1"]["data"]["midurlinfo"][0]
         ekey = info.get("ekey") or ""
@@ -78,23 +91,67 @@ def fetch_ekey(media_mid, filename, uin=None, authst=None, cookies=None):
     return ekey
 
 
-def load_credentials():
-    """凭据来源（按序）：
-    1. 配置文件 ~/.config/music-unlock/qqmusic.json: {"uin": "...", "authst": "..."}
-    2. QQ 音乐客户端数据目录（配置 {"qqmusic_dir": "..."} 指定）
-    3. Firefox 里 y.qq.com 的网页登录态（import_from_browser）
-    """
+def saved_credentials():
+    """只读已落盘凭据，不扫浏览器（给 GUI 主线程用）。"""
     try:
-        d = json.load(open(CONF))
+        with open(CONF, encoding="utf-8") as f:
+            d = json.load(f)
         if d.get("uin") and d.get("authst"):
             return d["uin"], d["authst"]
         if d.get("qqmusic_dir"):
             u, a = import_from_qq_dir(d["qqmusic_dir"])
             if u and a:
                 return u, a
-    except Exception:
+    except (OSError, json.JSONDecodeError, TypeError):
         pass
-    return import_from_browser()
+    return None, None
+
+
+def load_credentials():
+    """凭据来源（按序）：已保存配置 → QQ 音乐客户端 → 浏览器。"""
+    uin, authst = saved_credentials()
+    if uin and authst:
+        return uin, authst
+    uin, authst, _src = import_credentials()
+    return uin, authst
+
+
+def qqmusic_dirs():
+    """Windows QQ 音乐 PC 客户端数据目录。亲戚用的是这个，不是 Firefox。"""
+    if sys.platform != "win32":
+        return []
+    roaming = os.environ.get("APPDATA") or os.path.expanduser(r"~\AppData\Roaming")
+    local = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
+    return [
+        os.path.join(roaming, "Tencent", "QQMusic"),
+        os.path.join(local, "Tencent", "QQMusic"),
+        os.path.join(roaming, "QQMusic"),
+        os.path.join(local, "QQMusic"),
+    ]
+
+
+def import_from_qq_client():
+    """从本机 QQ 音乐客户端导入 uin + authst，成功则落盘。"""
+    import glob
+    for d in qqmusic_dirs():
+        for pat in ("QQMusicServiceConfig.ini", os.path.join("*", "QQMusicServiceConfig.ini")):
+            for cfg in glob.glob(os.path.join(d, pat)):
+                uin, authst = import_from_qq_dir(os.path.dirname(cfg))
+                if uin and authst:
+                    save_credentials(uin, authst)
+                    return uin, authst
+    return None, None
+
+
+def import_credentials():
+    """自动导入：QQ 音乐客户端 → 浏览器。返回 (uin, authst, 来源)。"""
+    uin, authst = import_from_qq_client()
+    if uin:
+        return uin, authst, "QQ音乐客户端"
+    uin, authst = import_from_browser()
+    if uin:
+        return uin, authst, "浏览器"
+    return None, None, None
 
 
 def import_from_qq_dir(qqdir):
@@ -134,40 +191,57 @@ def save_credentials(uin, authst):
         json.dump({"uin": uin, "authst": authst}, f, indent=1)
 
 
-def _firefox_cookie_db():
-    """定位 Firefox cookies.sqlite（.default-release / .default 配置目录）。"""
+def _firefox_profile_roots():
+    home = os.path.expanduser("~")
+    if sys.platform == "win32":
+        roaming = os.environ.get("APPDATA") or os.path.join(home, r"AppData\Roaming")
+        return [os.path.join(roaming, "Mozilla", "Firefox", "Profiles")]
+    if sys.platform == "darwin":
+        return [os.path.join(home, "Library", "Application Support", "Firefox", "Profiles")]
+    return [
+        os.path.join(home, ".mozilla", "firefox"),
+        os.path.join(home, ".config", "mozilla", "firefox"),
+        os.path.join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
+        os.path.join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
+    ]
+
+
+def _firefox_cookie_dbs():
     import glob
-    base = os.path.expanduser("~/.config/mozilla/firefox")
-    for pat in ("*.default-release", "*.default*", "*.default"):
-        for p in glob.glob(os.path.join(base, pat, "cookies.sqlite")):
-            return p
-    return None
+    found, seen = [], set()
+    for base in _firefox_profile_roots():
+        for pat in ("*.default-release", "*.default*", "Profiles/*.default-release", "Profiles/*.default*"):
+            for p in glob.glob(os.path.join(base, pat, "cookies.sqlite")):
+                if p not in seen:
+                    seen.add(p)
+                    found.append(p)
+    return found
 
 
 def _read_browser_cookies(hosts=("y.qq.com", ".qq.com")):
     """从 Firefox cookies.sqlite 读出指定域名的 cookie 字典。"""
-    import shutil
     import sqlite3
     import tempfile
-    db = _firefox_cookie_db()
-    if not db:
-        return {}
-    tmp = os.path.join(tempfile.gettempdir(), "mu_ck.sqlite")
-    shutil.copy(db, tmp)
-    wal = db + "-wal"
-    if os.path.exists(wal):
-        shutil.copy(wal, tmp + "-wal")
     out = {}
-    try:
-        con = sqlite3.connect(tmp)
-        for host, name, value in con.execute(
-                "select host, name, value from moz_cookies where host like '%qq.com%'"):
-            if any(h in host for h in hosts):
-                out[name] = value
-        con.close()
-    finally:
-        for f in (tmp, tmp + "-wal"):
-            os.path.exists(f) and os.remove(f)
+    for db in _firefox_cookie_dbs():
+        with tempfile.TemporaryDirectory(prefix="mu_ff_") as tmpdir:
+            tmp = os.path.join(tmpdir, "cookies.sqlite")
+            try:
+                import win32compat
+                win32compat.copy_even_if_locked(db, tmp)
+                wal = db + "-wal"
+                if os.path.exists(wal):
+                    win32compat.copy_even_if_locked(wal, tmp + "-wal")
+                con = sqlite3.connect(tmp)
+                for host, name, value in con.execute(
+                        "select host, name, value from moz_cookies where host like '%qq.com%'"):
+                    if name not in out and any(h in host for h in hosts):
+                        out[name] = value
+                con.close()
+            except (OSError, sqlite3.Error):
+                continue
+        if out:
+            break
     return out
 
 

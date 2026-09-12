@@ -1,0 +1,14 @@
+[package]
+name = "music-unlock"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+description = "音乐解锁 CLI 壳：调 core + qmc-decoder + um"
+
+[[bin]]
+name = "music-unlock"
+path = "src/main.rs"
+
+[dependencies]
+music-unlock-core = { path = "../core" }
+qmc-decoder = { path = "../../vendor/qmc-decoder" }

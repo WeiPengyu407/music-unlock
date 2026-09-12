@@ -25,16 +25,34 @@ WANT_KEYS = ("uin", "euin", "qqmusic_key", "qqmusic_fromtag")
 
 BROWSERS = {
     "win32": {
-        "chrome": "~/AppData/Local/Google/Chrome/User Data",
         "edge": "~/AppData/Local/Microsoft/Edge/User Data",
+        "chrome": "~/AppData/Local/Google/Chrome/User Data",
+        "qqbrowser": "~/AppData/Local/Tencent/QQBrowser/User Data",
+        "360安全": (
+            "~/AppData/Roaming/360se6/User Data",
+            "~/AppData/Roaming/360se/User Data",
+        ),
+        "360极速": (
+            "~/AppData/Roaming/360Chrome/Chrome/User Data",
+            "~/AppData/Local/360Chrome/Chrome/User Data",
+        ),
         "chromium": "~/AppData/Local/Chromium/User Data",
-        "360安全": "~/AppData/Roaming/360se6/User Data",
-        "360极速": "~/AppData/Roaming/360Chrome/Chrome/User Data",
     },
     "linux": {
-        "chrome": "~/.config/google-chrome",
-        "edge": "~/.config/microsoft-edge",
-        "chromium": "~/.config/chromium",
+        "chrome": (
+            "~/.config/google-chrome",
+            "~/snap/google-chrome/current/.config/google-chrome",
+            "~/.var/app/com.google.Chrome/config/google-chrome",
+        ),
+        "edge": (
+            "~/.config/microsoft-edge",
+            "~/.var/app/com.microsoft.Edge/config/microsoft-edge",
+        ),
+        "chromium": (
+            "~/.config/chromium",
+            "~/snap/chromium/common/chromium",
+            "~/.var/app/org.chromium.Chromium/config/chromium",
+        ),
         "360": "~/.config/360chrome",
     },
     "darwin": {
@@ -47,17 +65,8 @@ OSKEY = "win32" if sys.platform == "win32" else ("darwin" if sys.platform == "da
 
 
 def _aes():
-    """惰性加载 pycryptodome（mu-venv 兜底）。"""
-    try:
-        from Crypto.Cipher import AES
-        return AES
-    except ImportError:
-        venv = os.path.expanduser("~/.local/share/mu-venv/lib")
-        for p in glob.glob(venv + "/python*/site-packages"):
-            if p not in sys.path:
-                sys.path.insert(0, p)
-        from Crypto.Cipher import AES
-        return AES
+    from Crypto.Cipher import AES
+    return AES
 
 
 def _dpapi_decrypt(data):
@@ -192,10 +201,11 @@ def _read_chromium_cookies(browser_name, root):
         with tempfile.TemporaryDirectory(prefix=f"mu_ck_{browser_name}_") as tmpdir:
             tmp = os.path.join(tmpdir, "Cookies")
             try:
-                shutil.copy2(db, tmp)
+                import win32compat
+                win32compat.copy_even_if_locked(db, tmp)
                 for suffix in ("-wal", "-shm"):
                     if os.path.exists(db + suffix):
-                        shutil.copy2(db + suffix, tmp + suffix)
+                        win32compat.copy_even_if_locked(db + suffix, tmp + suffix)
                 with sqlite3.connect(tmp) as con:
                     rows = con.execute(
                         "select host_key, name, value, encrypted_value "
@@ -226,10 +236,14 @@ def read_all_browser_cookies():
             result["firefox"] = c
     except Exception:
         pass
-    for name, root in BROWSERS[OSKEY].items():
-        c = _read_chromium_cookies(name, root)
-        if c:
-            result[name] = c
+    for name, roots in BROWSERS[OSKEY].items():
+        if isinstance(roots, str):
+            roots = (roots,)
+        for root in roots:
+            c = _read_chromium_cookies(name, root)
+            if c:
+                result[name] = c
+                break
     return result
 
 

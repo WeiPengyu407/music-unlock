@@ -4,6 +4,7 @@
 KGMusicV3.db 中（与 QQ musicex 把 ekey 锁进 mmkv 同一套路）。
 本模块负责在常见位置自动找库，并记住找到（或用户最后兜底选定）的路径。"""
 import os
+import sys
 
 if os.name == "nt":
     MU_DIR = os.path.join(
@@ -14,36 +15,46 @@ else:
 CONF = os.path.join(MU_DIR, "kgg_db_path.txt")
 DB_NAME = "KGMusicV3.db"
 
-# Linux/Wine 常见根 + Windows 原生 AppData（酷狗 v11 密钥库通常在这里）
-ROOTS = [
-    "~/.cxoffice",
-    "~/.wine",
-    "~/Games",
-    "~/Applications",
-    "~/Downloads",
-]
-if os.name == "nt":
-    ROOTS.extend(p for p in (
-        os.environ.get("APPDATA"),
-        os.environ.get("LOCALAPPDATA"),
-    ) if p)
+def default_roots():
+    """Windows 只找酷狗自己的目录；不要扫整个 AppData（微信/浏览器会把扫描拖死）。"""
+    if os.name == "nt":
+        roaming = os.environ.get("APPDATA") or os.path.expanduser(r"~\AppData\Roaming")
+        local = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
+        return [
+            os.path.join(roaming, "KuGou8"),
+            os.path.join(roaming, "Kugou8"),
+            os.path.join(roaming, "KuGou"),
+            os.path.join(local, "KuGou8"),
+            os.path.join(local, "KuGou"),
+        ]
+    return [
+        "~/.cxoffice",
+        "~/.wine",
+        "~/.local/share/wineprefixes",
+        "~/Games",
+        "~/Applications",
+    ]
+
+
+ROOTS = default_roots()
 
 SKIP_DIRS = {
     "windows", "system32", "syswow64", "winsxs", "node_modules",
     ".git", "$recycle.bin", "temp", "tmp",
+    "steam", "steamapps", ".steam",
 }
 
 
 def _remember(path):
     os.makedirs(MU_DIR, exist_ok=True)
-    with open(CONF, "w") as f:
+    with open(CONF, "w", encoding="utf-8") as f:
         f.write(path)
     return path
 
 
 def saved_db():
     try:
-        with open(CONF) as f:
+        with open(CONF, encoding="utf-8") as f:
             p = f.read().strip()
         return p if p and os.path.exists(p) else None
     except OSError:
@@ -52,6 +63,14 @@ def saved_db():
 
 def set_db(path):
     return _remember(path)
+
+
+def usable_db(path):
+    """Windows 上酷狗开着会锁 KGMusicV3.db，拷一份给 um 用。"""
+    import win32compat
+    if sys.platform != "win32":
+        return path
+    return win32compat.snapshot_sqlite(path, os.path.join(MU_DIR, "kgg-snap"))
 
 
 def find_db():

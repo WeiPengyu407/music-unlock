@@ -1,0 +1,9 @@
+[package]
+name = "music-unlock-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+description = "mg3d / kgg 定位 / musicex footer，对照现有 Python 模块"
+
+[dev-dependencies]
+tempfile = "3"

@@ -14,4 +14,5 @@ dmg-root/
 /qmc-decoder.exe
 
 # Rust
+/target/
 vendor/qmc-decoder/target/

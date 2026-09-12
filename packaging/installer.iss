@@ -12,8 +12,12 @@
 AppName=音乐解锁
 AppVersion={#AppVersion}
 AppPublisher=music-unlock
-DefaultDirName={autopf}\音乐解锁
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+DefaultDirName={localappdata}\音乐解锁
 DefaultGroupName=音乐解锁
+CloseApplications=yes
+RestartIfNeededByRun=no
 OutputDir=..\Output
 OutputBaseFilename=music-unlock-setup-windows-{#AppArch}
 Compression=lzma2

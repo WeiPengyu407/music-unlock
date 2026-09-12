@@ -8,9 +8,15 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+
+import win32compat
 
 WRAPPER_HOST = "127.0.0.1"
-WRAPPER_PORT = 80
+WRAPPER_PORT = 18480  # 不要抢用户机器的 80
+_LEGACY_PORT = 80
+_active_port = None
 CONTAINER = "wrapper-v2"
 
 FROZEN = getattr(sys, "frozen", False)  # PyInstaller 冻结模式：gamdl 已打进 App，不再建 venv
@@ -85,6 +91,21 @@ def _module_run(mod, args, on_line=None):
     return (rc if rc is not None else 1), tail
 
 
+_NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+
+
+def _run(cmd, **kw):
+    if _NOWIN:
+        kw.setdefault("creationflags", _NOWIN)
+    return subprocess.run(cmd, **kw)
+
+
+def _popen(cmd, **kw):
+    if _NOWIN:
+        kw.setdefault("creationflags", _NOWIN)
+    return subprocess.Popen(cmd, **kw)
+
+
 class WrapperError(Exception):
     pass
 
@@ -109,8 +130,13 @@ def seed_assets(progress_cb=None):
                 _sh.copy2(src, dst)
 
 
-def _req(method, path, payload=None, timeout=15):
-    conn = http.client.HTTPConnection(WRAPPER_HOST, WRAPPER_PORT, timeout=timeout)
+def _port():
+    return _active_port or WRAPPER_PORT
+
+
+def _req(method, path, payload=None, timeout=15, port=None):
+    port = _port() if port is None else port
+    conn = http.client.HTTPConnection(WRAPPER_HOST, port, timeout=timeout)
     try:
         body = json.dumps(payload) if payload is not None else None
         conn.request(method, path, body=body,
@@ -120,18 +146,24 @@ def _req(method, path, payload=None, timeout=15):
         if resp.status >= 400:
             raise WrapperError(data.get("detail") or data.get("error") or f"HTTP {resp.status}")
         return data
-    except (OSError, http.client.HTTPException) as e:
-        raise WrapperError(f"wrapper 不可达：{e}")
+    except (OSError, http.client.HTTPException, json.JSONDecodeError):
+        raise WrapperError("Apple 解密连不上，请点「检查Apple解密链」")
     finally:
         conn.close()
 
 
+def _docker_cmds(args):
+    cmds = [["docker", *args]]
+    if sys.platform != "win32":
+        cmds.append(["sudo", "-n", "docker", *args])
+    return cmds
+
+
 def _try_start_container():
-    """容器没起就拉一把。用户在 docker 组里则免 sudo；不在也静默失败，交给上层报错。"""
-    for cmd in (["docker", "start", CONTAINER],
-                ["sudo", "-n", "docker", "start", CONTAINER]):
+    """容器没起就拉一把。Windows 不走 sudo；Linux 用户不在 docker 组才试 sudo -n。"""
+    for cmd in _docker_cmds(["start", CONTAINER]):
         try:
-            r = subprocess.run(cmd, capture_output=True, timeout=30)
+            r = _run(cmd, capture_output=True, timeout=30)
             if r.returncode == 0:
                 return True
         except (OSError, subprocess.TimeoutExpired):
@@ -140,14 +172,19 @@ def _try_start_container():
 
 
 def wrapper_up():
-    """wrapper 服务是否可用；不可用会先尝试启动容器再复查一次。"""
+    """wrapper 服务是否可用；不可用会先尝试启动容器再复查一次。
+    新容器走 18480；已经占着 80 的旧容器也能对上。"""
+    global _active_port
+    ports = (_active_port,) if _active_port else (WRAPPER_PORT, _LEGACY_PORT)
     for attempt in range(2):
-        try:
-            d = _req("GET", "/health", timeout=8)
-            if d.get("status") == "ok":
-                return True
-        except WrapperError:
-            pass
+        for port in ports:
+            try:
+                d = _req("GET", "/health", timeout=8, port=port)
+                if d.get("status") == "ok":
+                    _active_port = port
+                    return True
+            except WrapperError:
+                continue
         if attempt == 0:
             _try_start_container()
     return False
@@ -179,19 +216,30 @@ def login(apple_id, password, code=None):
 
 
 def is_apple_url(text):
-    return text.strip().lower().startswith(("https://music.apple.com/", "http://music.apple.com/"))
+    raw = text.strip().lower()
+    if not raw.startswith(("http://", "https://")):
+        return False
+    host = raw.split("://", 1)[1].split("/", 1)[0].split("@")[-1].split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host in {
+        "music.apple.com",
+        "geo.music.apple.com",
+        "itunes.apple.com",
+        "geo.itunes.apple.com",
+    }
 
 
 def check_chain():
     """按依赖顺序走查整条链：容器服务 → 解密引擎 → 下载器 → 登录态。"""
     if not wrapper_up():
-        return False, "container", "wrapper 服务未运行（容器 wrapper-v2 未启动）"
+        return False, "container", "Apple 解密还没启动，点「检查Apple解密链」再试"
     if not playback_ready():
-        return False, "engine", "解密引擎未就绪（playback_ready=false）"
+        return False, "engine", "Apple 解密还没准备好，稍后再试"
     if not (FROZEN or os.path.exists(GAMDL)):
-        return False, "downloader", "下载器 gamdl 未安装"
+        return False, "downloader", "安装不完整，缺少下载组件"
     if not is_logged_in():
-        return False, "auth", "Apple ID 未登录或会话已失效"
+        return False, "auth", "还没登录 Apple ID，或登录已过期"
     return True, None, ""
 
 
@@ -200,10 +248,10 @@ def download(url, outdir, progress_cb=None):
     progress_cb 可选，逐曲目回调进度文本（苹果链是网络拉流，耗时远长于本地解密）。
     冻结模式：gamdl 已打进 App，子进程跑模块；开发模式：调 venv 里的 CLI。"""
     if not FROZEN and not os.path.exists(GAMDL):
-        return False, "缺少 gamdl"
+        return False, "安装不完整，缺少下载组件"
     os.makedirs(outdir, exist_ok=True)
     args = ["--use-wrapper",
-            "--wrapper-url", f"http://{WRAPPER_HOST}:{WRAPPER_PORT}",
+            "--wrapper-url", f"http://{WRAPPER_HOST}:{_port()}",
             "--wrapper-decrypt-host", WRAPPER_HOST,
             "--wrapper-decrypt-port", "10020",
             "--song-codec-priority", "alac,aac",  # 无损优先，拿不到无损才退 AAC
@@ -218,8 +266,8 @@ def download(url, outdir, progress_cb=None):
     if FROZEN:
         rc, tail = _module_run("gamdl", args, on_line)
     else:
-        p = subprocess.Popen([GAMDL, *args],
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        p = _popen([GAMDL, *args],
+                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         tail = []
         ansi = re.compile(r"\x1b\[[0-9;]*m")
         for line in p.stdout:
@@ -229,7 +277,12 @@ def download(url, outdir, progress_cb=None):
             tail.append(line)
             tail = tail[-20:]
             on_line(line)
-        p.wait(timeout=1800)
+        try:
+            p.wait(timeout=1800)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait(timeout=10)
+            return False, "下载超时"
         rc = p.returncode
     if rc == 0:
         return True, ""
@@ -272,7 +325,7 @@ IMAGE_TAR = os.path.join(
     MU_DIR,
     "wrapper-v2-image-arm64.tar.gz" if _target_arch() == "arm64-v8a"
     else "wrapper-v2-image.tar.gz")
-GAMDL_VENV = os.path.join(_BASE, "gamdl-venv")
+GAMDL_VENV = os.path.join(MU_DIR, "gamdl-venv")
 GAMDL = _venv_tool(GAMDL_VENV, "gamdl")
 APK_CACHE = os.path.join(MU_DIR, "apple-music-3.6.0-beta.apkm")
 _APK_GITHUB = (
@@ -290,26 +343,34 @@ def _apk_urls():
     return [p + _APK_GITHUB for p in _APK_MIRRORS] + [_APK_GITHUB]
 
 
+def _direct_opener():
+    """用户侧网络默认直连。不吃 http_proxy / 系统代理——那是开发者机器上的东西。"""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def fetch_apk(progress_cb=None):
     """从 GitHub Release（国内镜像优先）拉 Apple Music 安装包。
-    安全性不靠下载源：拆件后 18 个 .so 逐个对 SHA-256，对不上就拒。"""
+    安全性不靠下载源：拆件后 18 个 .so 逐个对 SHA-256，对不上就拒。
+    不调用 curl、不走本机代理。"""
     cb = progress_cb or (lambda t: None)
     if os.path.exists(APK_CACHE) and os.path.getsize(APK_CACHE) >= 50_000_000:
         return APK_CACHE
     cb("下载 Apple Music 安装包（约 84MB）…")
     os.makedirs(MU_DIR, exist_ok=True)
     tmp = APK_CACHE + ".part"
+    opener = _direct_opener()
     try:
         for url in _apk_urls():
-            if os.path.exists(tmp):
-                os.remove(tmp)
-            r = subprocess.run(
-                ["curl", "-fL", "-m", "600", "--retry", "2", "-o", tmp, url],
-                capture_output=True, text=True, timeout=660)
-            if (r.returncode == 0 and os.path.exists(tmp)
-                    and os.path.getsize(tmp) >= 50_000_000):
-                os.replace(tmp, APK_CACHE)
-                return APK_CACHE
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                with opener.open(url, timeout=600) as resp, open(tmp, "wb") as out:
+                    shutil.copyfileobj(resp, out, 1024 * 1024)
+                if os.path.exists(tmp) and os.path.getsize(tmp) >= 50_000_000:
+                    os.replace(tmp, APK_CACHE)
+                    return APK_CACHE
+            except (OSError, urllib.error.URLError, TimeoutError):
+                continue
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -317,11 +378,11 @@ def fetch_apk(progress_cb=None):
 
 
 def _docker(*args, timeout=120, capture=True):
-    """docker 命令：优先直接调（用户在 docker 组），失败退到 sudo -n。返回 CompletedProcess。"""
+    """docker 命令：优先直接调；Linux 失败再试 sudo -n。Windows 不走 sudo。"""
     last = None
-    for cmd in (["docker", *args], ["sudo", "-n", "docker", *args]):
+    for cmd in _docker_cmds(list(args)):
         try:
-            r = subprocess.run(cmd, capture_output=capture, text=True, timeout=timeout)
+            r = _run(cmd, capture_output=capture, text=True, timeout=timeout)
             if r.returncode == 0:
                 return r
             last = r
@@ -376,10 +437,10 @@ def _current_username():
 def _load_docker_image():
     """不经过 shell 管道，把 gzip 镜像流直接交给 docker load。"""
     last = None
-    for cmd in (["docker", "load"], ["sudo", "-n", "docker", "load"]):
+    for cmd in _docker_cmds(["load"]):
         process = None
         try:
-            process = subprocess.Popen(
+            process = _popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             with gzip.open(IMAGE_TAR, "rb") as image:
                 shutil.copyfileobj(image, process.stdin, length=1024 * 1024)
@@ -515,7 +576,7 @@ def provision(progress_cb, apk_path=None):
         have_image = False
     if not have_image:
         if not os.path.exists(IMAGE_TAR):
-            raise WrapperError(f"缺少内置镜像包 {IMAGE_TAR}")
+            raise WrapperError("安装不完整，缺少解密引擎镜像")
         cb("导入内置解密引擎镜像（约 1 分钟）…")
         _load_docker_image()
 
@@ -540,24 +601,26 @@ def provision(progress_cb, apk_path=None):
         # AOSP 系统件（libc.so 等），daemon 会起不来。
         cmd = ["run", "-d", "--name", CONTAINER, "--privileged",
                "--restart", "unless-stopped",
-               "-p", "80:80", "-p", "10020:10020"]
+               "-p", f"127.0.0.1:{WRAPPER_PORT}:80", "-p", "127.0.0.1:10020:10020"]
         for name in _expected_libs():
-            cmd += ["-v", f"{os.path.join(LIBS_DIR, name)}:/app/rootfs/system/lib64/{name}"]
-        cmd += ["-v", f"{DATA_DIR}:/app/rootfs/data/data/com.apple.android.music/files",
-                _image_tag()]
+            cmd += ["-v", win32compat.docker_bind(
+                os.path.join(LIBS_DIR, name), f"/app/rootfs/system/lib64/{name}")]
+        cmd += ["-v", win32compat.docker_bind(
+            DATA_DIR, "/app/rootfs/data/data/com.apple.android.music/files"),
+            _image_tag()]
         _docker(*cmd, timeout=60)
 
     cb("检查下载器 gamdl…")
     if not FROZEN and not os.path.exists(GAMDL):  # 冻结模式下 gamdl 已打进 App
         cb("安装下载器 gamdl（离线包）…")
-        subprocess.run(["python3", "-m", "venv", GAMDL_VENV],
-                       capture_output=True, timeout=300)
+        _run(["python3", "-m", "venv", GAMDL_VENV],
+             capture_output=True, timeout=300)
         pip = _venv_tool(GAMDL_VENV, "pip")
-        r = subprocess.run([pip, "install", "--no-index", "--find-links", WHEELS_DIR, "gamdl"],
-                           capture_output=True, text=True, timeout=600)
+        r = _run([pip, "install", "--no-index", "--find-links", WHEELS_DIR, "gamdl"],
+                 capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
-            r = subprocess.run([pip, "install", "gamdl"],
-                               capture_output=True, text=True, timeout=600)
+            r = _run([pip, "install", "gamdl"],
+                     capture_output=True, text=True, timeout=600)
             if r.returncode != 0:
                 raise WrapperError("gamdl 安装失败：" + r.stderr.strip()[-80:])
 
@@ -568,4 +631,4 @@ def provision(progress_cb, apk_path=None):
             cb("特殊解密引擎准备完成")
             return
         time.sleep(2)
-    raise WrapperError("引擎自检超时（playback_ready 未就绪）")
+    raise WrapperError("Apple 解密启动超时，请再试一次")
