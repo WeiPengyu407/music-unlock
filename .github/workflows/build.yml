@@ -75,12 +75,12 @@ jobs:
 
       - name: 构建 qmc-decoder 引擎（Rust）
         run: |
-          cd vendor/qmc-decoder && cargo build --release
-          cd ../..
+          # workspace 产物在仓库根 target/，不是 vendor/qmc-decoder/target/
+          cargo build --release -p qmc-decoder
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp vendor/qmc-decoder/target/release/qmc-decoder.exe .
+            cp target/release/qmc-decoder.exe .
           else
-            cp vendor/qmc-decoder/target/release/qmc-decoder .
+            cp target/release/qmc-decoder .
           fi
         shell: bash
 

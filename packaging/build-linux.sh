@@ -34,8 +34,8 @@ fi
 
 echo "=== 3/6 编译 qmc-decoder 引擎（Rust） ==="
 if [ ! -x qmc-decoder ]; then
-  cargo build --release --manifest-path vendor/qmc-decoder/Cargo.toml
-  cp vendor/qmc-decoder/target/release/qmc-decoder .
+  cargo build --release -p qmc-decoder
+  cp target/release/qmc-decoder .
 fi
 
 echo "=== 4/6 下载运行时资产 ==="

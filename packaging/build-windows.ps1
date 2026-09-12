@@ -34,8 +34,8 @@ if (-not (Test-Path "$env:USERPROFILE\.cargo\config.toml")) {
     # crates.io 国内不稳，换 rsproxy 镜像
     "[source.crates-io]`nreplace-with = 'rsproxy-sparse'`n[source.rsproxy-sparse]`nregistry = 'sparse+https://rsproxy.cn/index/'" | Out-File -Encoding utf8 "$env:USERPROFILE\.cargo\config.toml"
 }
-cargo build --release --manifest-path vendor/qmc-decoder/Cargo.toml
-Copy-Item vendor/qmc-decoder/target/release/qmc-decoder.exe .
+cargo build --release -p qmc-decoder
+Copy-Item target/release/qmc-decoder.exe .
 
 Write-Host "=== 4/6 PyInstaller 冻结 ==="
 pyinstaller --noconfirm --windowed --onedir --name music-unlock `

@@ -35,6 +35,7 @@ def _engine(name):
         os.path.join(here, exe),
     ]
     if name == "qmc-decoder":
+        candidates.append(os.path.join(here, "target", "release", exe))
         candidates.append(os.path.join(here, "vendor", "qmc-decoder", "target", "release", exe))
     if sys.platform != "win32":
         candidates.append(os.path.expanduser(os.path.join("~/.local/bin", exe)))

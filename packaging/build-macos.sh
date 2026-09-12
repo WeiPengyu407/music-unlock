@@ -33,8 +33,8 @@ if [ ! -f ~/.cargo/config.toml ]; then
   mkdir -p ~/.cargo
   printf '[source.crates-io]\nreplace-with = "rsproxy-sparse"\n[source.rsproxy-sparse]\nregistry = "sparse+https://rsproxy.cn/index/"\n' > ~/.cargo/config.toml
 fi
-cargo build --release --manifest-path vendor/qmc-decoder/Cargo.toml
-cp vendor/qmc-decoder/target/release/qmc-decoder .
+cargo build --release -p qmc-decoder
+cp target/release/qmc-decoder .
 
 echo "=== 4/6 PyInstaller 冻结 ==="
 pyinstaller --noconfirm --windowed --onedir --name music-unlock \
